@@ -154,14 +154,16 @@ def cmd_service_resume() -> None:
 
 
 def cmd_service_switch() -> None:
-    """切换 Agent：暂停 + 提示配置新 agent_id。"""
+    """同步到最新官方 Agent：平仓 + 清基线 + 重新拉取 Agent 指针 + 重启。
+
+    跟单 Agent 由官方集中选择并通过远端指针下发；本命令让用户主动同步到当前
+    最新的官方 Agent。会先平掉当前所有持仓并清除基线，再重启服务（重启时自动
+    重新解析 Agent 指针并重建基线）。
+    """
     cmd_service_pause()
     print()
-    print("请配置新的 Agent:")
-    print(f"  方式 1: 编辑 {cfg.get_config_path()} 中 moss_source.agent_id")
-    print(f"  方式 2: python cli.py --config {cfg.get_config_path()} config set moss_source '{{...}}'")
-    print()
-    print(f"配置完成后，运行 'python cli.py --config {cfg.get_config_path()} service resume' 恢复跟单。")
+    print("正在同步到最新官方 Agent（重启时将自动拉取最新 Agent 并重建基线）...")
+    cmd_service_resume()
 
 
 def _watchdog_interval_arg(args: list[str]) -> int:

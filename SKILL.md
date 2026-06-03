@@ -1,24 +1,26 @@
 ---
-name: hyper-follow
-description: Manage the Hyperliquid copy-trading (follow) agent service. Use when the user wants to start/stop/check the follow service, generate a wallet, configure authorization, manage agent list, or view trade history and statistics.
+name: superclaw-perps-copytrade
+description: Manage the SuperClaw Hyperliquid copy-trading service. Use when the user wants to start/stop/check the follow service, generate an agent wallet, complete authorization, view trade history/stats, or sync to the latest curated agent. The followed agent is selected centrally by the SuperClaw admin and resolved automatically at service start - the user never picks a trader.
 ---
 
-# Moss Trading Bot — 交互链路文档
+# SuperClaw Copy-Trade — 交互链路文档
 
-> 适用于 OpenClaw Skill 开发，描述 Bot 在对话中的完整交互逻辑。
+> 适用于 SuperClaw / OpenClaw Skill 开发，描述 Bot 在对话中的完整交互逻辑。
+> 跟单 Agent 由官方集中选择，服务启动时通过远端指针 `agent_pointer_url` 自动解析并写入 `moss_source.agent_id`；用户不选择、不输入、也无法更换 Agent。
 
 ---
 
 ## 概述
 
-用户在 OpenClaw 安装 Moss Trading Skill 后，可通过对话跟随 Moss 平台上的 Agent 在 Hyperliquid 上自动执行交易。
+用户安装 SuperClaw Copy-Trade Skill 后，可通过对话在 Hyperliquid 上自动跟随由官方集中挑选的交易 Agent。跟单 Agent **不由用户选择**——服务启动/恢复时会从官方远端指针自动解析当前生效的 Agent。
 
-整体流程分为四个阶段：
+整体流程分为三个阶段：
 
 1. 钱包设置（连接主钱包 + 生成 Agent Wallet + 签名注册）
-2. 选择 Agent（用户在 Moss 平台自选，复制链接发给 Bot）
-3. 配置跟单参数（比例、止损）
-4. 运行与管理（状态查询、暂停、切换、停止）
+2. 配置跟单参数（比例、止损、滑点）
+3. 运行与管理（状态查询、暂停、同步最新 Agent、停止）
+
+> **Agent 选择**：用户无需、也无法在对话中挑选跟单对象。当前生效的 Agent 由官方通过 `agent_pointer_url` 远端指针下发，服务启动时自动写入配置。用户更换设备/重装后拉到的也是当前官方 Agent。
 
 ## 重要限制
 
@@ -28,10 +30,10 @@ description: Manage the Hyperliquid copy-trading (follow) agent service. Use whe
 ## 对话输出硬性规则
 
 1. **安装完成后直接给授权链接**：用户要求安装/更新/测试跟单 skill，且已生成 Agent Wallet 后，回复必须包含 Agent Wallet 地址、网络、授权页面完整 URL（从配置中的 `hl_authorize_url` 拼接 `<wallet_address>`）。不要只说“去授权页面”，也不要等用户追问“授权页面是多少”。
-2. **授权成功后一次性收集信息**：用户说“授权成功”后，提示他可以一次性发送 `主钱包地址 + 跟单 Agent ID/链接`；同时按当前网络给出 Moss Agent 列表页面（主网 `https://moss.site/agent?mode=realtime`；测试网 `https://alpha.moss.site/agent?mode=realtime`），让用户自行选择并复制链接或 ID。如果只提供其中一个，再追问缺失项。
+2. **授权成功后只收集主钱包地址**：用户说“授权成功”后，提示他发送主钱包地址即可。**不要**索要、提示或接受用户提供的 Agent ID/链接——跟单 Agent 由官方集中下发，服务启动时自动解析，用户无需选择。
 3. **跟单启动成功后输出简洁摘要**：启动成功消息保持简洁，但需比日常推送信息更完整，至少包含 Agent、Agent 持仓、初始化执行结果、跟单比例、滑点、币种白名单、主钱包地址、Agent Wallet 地址、Follower ID（若有）、网络和运行状态。不要默认输出止损/止盈或轮询间隔，除非用户刚配置或主动询问。
 4. **讨论充值时必须明确充值目标**：当用户询问充值、补保证金、余额不足怎么办时，Bot 必须明确提醒“请充值到主钱包对应的 Hyperliquid 账户”，不要让用户误解成直接链上转账到主钱包地址本身。
-5. **配置 Agent ID 前给列表页面**：用户授权结束后需要配置 `moss_source.agent_id`，或用户选择/切换跟单 Agent 时，Bot 不能只要求用户输入 `agt_xxx`；必须先提供当前网络对应的 Moss Agent 列表页面（主网 `https://moss.site/agent?mode=realtime`；测试网 `https://alpha.moss.site/agent?mode=realtime`），让用户自行挑选并复制 Agent 链接或 ID。不要编造或内置推荐列表。
+5. **永远不要让用户挑选 Agent**：跟单 Agent 由官方集中选择并通过远端指针下发。Bot 不得索要 `agt_xxx`、不得提供 Agent 列表页面、不得让用户粘贴链接。若用户主动要求“换一个 Agent / 跟某某”，明确说明本服务的 Agent 由官方统一挑选，用户可发送「同步最新 Agent」拉取当前官方 Agent，但不能自选具体对象。
 
 ---
 
@@ -41,7 +43,7 @@ description: Manage the Hyperliquid copy-trading (follow) agent service. Use whe
 Hyperliquid 提供官方 Agent 机制：用户主钱包授权一个独立的 Agent Wallet，由 Bot 持有其私钥，代替用户在 Hyperliquid 上提交交易。主钱包资产不会被直接操作，Agent 授权可随时吊销。
 
 **跟单逻辑**
-用户选定 Moss 平台上的某个 Agent 后，Bot 监听该 Agent 的交易行为（通过 Moss Source-Core 2.0 API 轮询 fills），按用户设置的比例，用 Agent Wallet 在 Hyperliquid 上同步执行 delta 仓位对齐。
+官方集中选定一个 Agent（通过 `agent_pointer_url` 远端指针下发）后，Bot 监听该 Agent 的交易行为（通过 Moss Source-Core 2.0 API 的 WS + REST fills），按用户设置的比例，用 Agent Wallet 在 Hyperliquid 上同步执行 delta 仓位对齐。用户不参与 Agent 选择。
 
 **核心机制：基线 + Delta 对齐**
 - 启动时记录 Agent 当前仓位作为基线（baseline）
@@ -103,7 +105,7 @@ python3 -m venv .venv
 
 ### Moss Follower 鉴权
 
-当前版本使用 Follower 钱包签名鉴权，不再需要配置 `api_key` / `api_secret`。服务启动时会使用 Agent Wallet 私钥向 Moss 注册 Follower，并用钱包签名访问所选 Agent 的只读仓位、账户和成交数据。
+当前版本使用 Follower 钱包签名鉴权，不再需要配置 `api_key` / `api_secret`。服务启动时会使用 Agent Wallet 私钥向 Moss 注册 Follower，并用钱包签名访问当前官方 Agent 的只读仓位、账户和成交数据。
 
 ---
 
@@ -124,10 +126,7 @@ python3 -m venv .venv
 • 网络: 测试网
 • 授权页面: https://alpha.moss.site/hyperliquid/authorize/0xAGENT_ADDRESS
 
-请用主钱包打开授权页面完成授权。授权成功后，可以去 Moss Agent 列表选择想跟单的 Agent（按当前网络选择）：
-• 主网：https://moss.site/agent?mode=realtime
-• 测试网：https://alpha.moss.site/agent?mode=realtime
-然后一次性把「主钱包地址 + Agent 链接或 ID」发给我。
+请用主钱包打开授权页面完成授权。授权成功后，把主钱包地址发给我即可——跟单 Agent 已由官方自动选定，你无需选择。
 ```
 
 ### 钱包设置页面（独立页面，顺序执行）
@@ -156,7 +155,7 @@ python3 -m venv .venv
   - **Agent Wallet 地址**（wallet_address）：0xAGENT_ADDRESS（代理下单的账户）
   - 说明：主钱包授权 Agent Wallet 代为交易，资金仍在主钱包中
 - **重要提醒**：Bot 需明确告知用户"请确认主钱包地址正确，后续跟单资金将从该账户扣除"
-- 引导用户进入下一阶段：选择 Agent
+- 引导用户进入下一阶段：配置跟单参数（Agent 已由官方自动选定，无需用户挑选）
 
 ### 对应 CLI 操作
 
@@ -171,7 +170,7 @@ python3 -m venv .venv
 .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json config check-auth
 ```
 
-**注意**：钱包设置页面连接主钱包后，应自动将 `main_address` 写入配置。Bot 在"返回对话后"需通过 `config show` 确认 `main_address` 已正确配置，若为空则提示用户手动提供主钱包地址。若用户只说“授权成功”但没有提供主钱包地址，Bot 应回复：“授权成功后，请把主钱包地址发我；同时可以打开当前网络对应的 Moss Agent 列表选择跟单对象（主网 https://moss.site/agent?mode=realtime；测试网 https://alpha.moss.site/agent?mode=realtime），如果已经选好，也可以把主钱包地址和 Agent ID/链接一起发来。”不要只索要主钱包地址后再单独等待下一轮才索要 Agent。
+**注意**：钱包设置页面连接主钱包后，应自动将 `main_address` 写入配置。Bot 在"返回对话后"需通过 `config show` 确认 `main_address` 已正确配置，若为空则提示用户手动提供主钱包地址。若用户只说“授权成功”但没有提供主钱包地址，Bot 应回复：“授权成功后，请把主钱包地址发我即可——跟单 Agent 已由官方自动选定，你无需选择。”
 
 授权需要用户在配置中的 `hl_authorize_url` 页面完成，URL 中末尾地址替换为实际的 Agent Wallet 地址。`dev` 分支默认测试网：
 
@@ -204,62 +203,20 @@ https://alpha.moss.site/hyperliquid/authorize/0xAbCd...1234
 
 ---
 
-## 阶段二：选择 Agent
+## Agent 选择（自动，无用户交互）
+
+跟单 Agent 由官方集中选择，**没有独立的“选择 Agent”阶段**。
+
+- 服务启动/恢复时，CLI 会从 `agent_pointer_url` 远端指针解析当前官方 Agent，并写入 `moss_source.agent_id`。
+- 远端指针不可达时，沿用配置中“上次已知”的 `agent_id`；若从未解析过则启动失败并提示。
+- 用户可随时发送「同步最新 Agent」（`service switch`）平仓并切换到当前最新官方 Agent。
+
+钱包设置完成后，**直接进入下一阶段（配置跟单参数）**，不要要求用户选择或粘贴 Agent。
+
+## 阶段二：配置跟单参数
 
 ### 触发条件
-钱包设置完成后，Bot 引导用户选择 Agent。
-
-### 交互流程
-
-**Bot 消息**
-提示用户前往 Moss 平台浏览 Agent，选好后复制链接或 Agent ID 发给 Bot。
-提供平台地址（按当前网络选择）：主网 `https://moss.site/agent?mode=realtime`；测试网 `https://alpha.moss.site/agent?mode=realtime`
-说明格式：
-- 完整链接：`moss.site/agent/agt_...`
-- 或直接发送 Agent ID：`agt_...`
-
-无需在对话中内置或生成 Agent 候选列表；给出当前网络对应页面即可，让用户自行浏览后复制目标 Agent 链接或 `agt_...`。
-
-**用户操作**
-1. 前往 Moss 平台浏览 Agent 列表
-2. 选定目标 Agent
-3. 复制 Agent 页面链接或 Agent ID
-4. 将链接/ID 粘贴发送给 Bot
-
-**Bot 收到后**
-1. 回复「正在读取 Agent 信息…」
-2. 解析输入提取 agent_id（支持两种格式）：
-   - 完整链接：`moss.site/agent/agt_xxx` → 提取 `agt_xxx`
-   - 纯 ID：`agt_xxx` → 直接使用
-3. 通过 Moss 公开 API 拉取 Agent 数据：
-   ```
-   GET /api/v2/moss/trader/realtime/bots/:agent_id
-   ```
-4. 展示 Agent 详情：
-   - 策略名称与风格描述
-   - 累计收益率 (ROI)
-   - 累计盈亏 (PnL)
-   - 运行状态
-   - 创建时间
-5. 询问用户是否确认跟单
-
-### 对应 CLI 操作
-
-```bash
-# 配置 Moss 信号源
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json config set moss_source.agent_id agt_xxx
-```
-
-### 用户决策
-- **确认跟单** → 进入阶段三配置参数
-- **换一个** → 重新引导用户去 Moss 平台选择，重复本阶段流程
-
----
-
-## 阶段三：配置跟单参数
-
-### 触发条件
-用户确认跟单某个 Agent 后。
+钱包设置完成后（Agent 已由官方自动选定）。
 
 ### 参数一：跟单比例
 
@@ -301,7 +258,7 @@ Bot 汇总配置信息供用户确认：
 
 ---
 
-## 阶段四：运行与管理
+## 阶段三：运行与管理
 
 ### 激活成功
 
@@ -374,7 +331,7 @@ Bot 发送启动成功消息，告知用户 Agent 有新操作时会立即通知
 |------|------|----------|
 | 暂停跟单 | 平掉所有持仓并停止跟单 | `service pause` |
 | 恢复跟单 | 从暂停状态重新开始跟单 | `service resume` |
-| 切换 Agent | 暂停当前跟单并引导配置新 Agent | `service switch` |
+| 同步最新 Agent | 平仓 + 清基线 + 重新解析官方 Agent 指针 + 重启 | `service switch` |
 | 调整参数 | 重新配置跟单比例、止损、止盈、滑点、币种白名单 | `config set ...` |
 | 停止 | 进入二次确认流程 | `service stop` + 吊销 Agent |
 | 状态 | 返回当前跟单状态摘要 | `service status` + `stats` |
@@ -449,64 +406,37 @@ Bot：（执行 service resume）
 
 ---
 
-### 切换 Agent 流程
+### 同步最新 Agent 流程
 
-**触发场景**：用户想换一个跟单 Agent。
+**触发场景**：用户想确保自己跟的是当前最新的官方 Agent（官方可能已更新 Agent）。
 
 ```
-用户：切换 Agent
+用户：同步最新 Agent
 
-Bot：（执行 service status 读取当前 agent_id）
-     收到，切换 Agent 流程如下：
-     第一步：将自动暂停当前跟单并平仓
-     第二步：请您配置新的 Agent
-     第三步：配置完成后手动恢复跟单
-
-     当前跟单 Agent：XXX
-     确认开始切换吗？[确认] [取消]
+Bot：（执行 service status 确认当前状态）
+     同步将：
+     - 平掉当前所有持仓
+     - 重新拉取当前官方 Agent 并重建基线
+     确认同步吗？[确认] [取消]
 
 用户：确认
 
-Bot：（执行 service switch = service pause）
-     ✅ 已暂停当前跟单，持仓已平仓
-     请在 Moss 平台中选择配置新的 Agent（按当前网络选择）：主网 https://moss.site/agent?mode=realtime；测试网 https://alpha.moss.site/agent?mode=realtime
-     选择完成后，将 Agent 链接或 Agent ID（agt_xxx）发给我，我来帮您配置
-
-用户：（发送 Agent 链接 moss.site/agent/agt_yyy，或直接发送 agt_yyy）
-
-Bot：（解析输入提取 agent_id，读取 Agent 信息，更新 moss_source.agent_id）
-     已解析新 Agent 信息：
-     - 名称：YYY
-     - 策略风格：...
-     - ROI：...
-     确认使用此 Agent 吗？[确认] [取消]
-
-用户：确认
-
-Bot：✅ 新 Agent 配置完成
-     发送「恢复跟单」以重新启动
-
-用户：恢复跟单
-
-Bot：（执行 service resume）
-     ✅ 新 Agent 已生效，跟单已启动
-     当前跟单 Agent：YYY
+Bot：（执行 service switch = pause + resume）
+     ✅ 已同步到最新官方 Agent
+     - 旧持仓已平仓
+     - 已按当前官方 Agent 重建基线，跟单继续运行
 ```
 
 对应 CLI：
 ```bash
-.venv/bin/python cli.py service status     # 读取当前 agent_id
-.venv/bin/python cli.py service pause      # 暂停 + 平仓
-# 用户发送新 Agent 链接后：
-.venv/bin/python cli.py config set moss_source.agent_id agt_yyy
-.venv/bin/python cli.py service resume     # 恢复
+.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json service switch
 ```
 
-**异常处理**：
-- 用户任意步骤回复「取消」→ Bot 回复「已取消切换」，保持当前暂停状态
-- 解析 Agent 输入失败 → Bot 提示「无法识别，请粘贴 `moss.site/agent/agt_xxx` 格式链接，或直接发送 `agt_xxx` 形式的 Agent ID」
+`service switch` 会执行：暂停（全平仓 + 清基线）→ 重启服务（启动时自动重新解析 `agent_pointer_url`，重建基线）。用户不需要、也不能指定具体 Agent。
 
----
+**异常处理**：
+- 用户回复「取消」→ 不做任何操作，保持当前跟单。
+- 远端指针不可达 → 重启时沿用上次已知 Agent，并提示用户稍后再试。
 
 ### 调整参数流程
 
@@ -623,12 +553,10 @@ Bot 发送确认提示，说明：
   Step 2: 生成 Agent Wallet
   Step 3: 主钱包签名
      ↓ 完成，自动发消息返回对话
-[Bot 验证成功] → 引导选择 Agent
+[Bot 验证成功] → 进入配置跟单参数（Agent 已自动选定）
      ↓
-[用户去 Moss 平台，复制链接发给 Bot]
+[Agent 由官方指针自动选定，无用户交互]
      ↓
-[Bot 解析链接，展示 Agent 信息]
-     ↓ 用户确认 / 换一个（循环）
 [配置跟单参数]
   - 跟单比例
   - 止损线
@@ -643,9 +571,7 @@ Bot 发送确认提示，说明：
   ├── 用户「调整参数」→ 选参数 → 输入新值 → [跟单中]（参数更新，继续运行）
   ├── 用户「暂停跟单」→ 二次确认 → 全平仓 → [已暂停]
   │                                               ├── 「恢复跟单」→ 二次确认 → 重建基线 → [跟单中]
-  │                                               └── 「切换 Agent」→ 平仓（已完成）→ 发 Agent 链接
-  │                                                                        → 配置新 agent_id
-  │                                                                        → 「恢复跟单」→ [跟单中]
+  │                                               └── 「同步最新 Agent」→ 平仓 → 重新解析官方 Agent → [跟单中]
   └── 用户「停止」→ 二次确认 → 吊销 Agent Wallet
                               ↓
                          [可重新开始]
@@ -662,14 +588,13 @@ Bot 发送确认提示，说明：
 | 状态 | 运行中 / 暂停中 | 返回跟单状态摘要 |
 | 暂停跟单 | 运行中 | 二次确认 → 全平仓 + 停止服务 |
 | 恢复跟单 | 暂停中 | 二次确认 → 重建基线 + 恢复服务 |
-| 切换 Agent | 运行中 / 暂停中 | 暂停 + 平仓（若运行中）→ 引导发 Agent 链接 → 配置新 agent_id |
+| 同步最新 Agent | 运行中 / 暂停中 | 平仓 + 清基线 + 重新解析官方 Agent 指针 + 重启 |
 | 调整参数 | 运行中 / 暂停中 | 展示参数选项 → 引导修改具体参数 |
 | 确认暂停 | 暂停确认中 | 执行 service pause |
 | 确认恢复 | 恢复确认中 | 执行 service resume |
 | 停止 | 运行中 / 暂停中 | 触发停止确认流程 |
 | 确认停止 | 停止确认中 | 执行停止并吊销 Agent Wallet |
 | 取消 | 任意确认中 | 取消当前操作，维持现状 |
-| moss.site/agent/... 或 agt_... | 选 Agent / 切换 | 解析输入提取 agent_id，读取 Agent 信息 |
 
 ---
 
@@ -708,7 +633,7 @@ Bot 发送确认提示，说明：
 ## 注意事项
 
 - 钱包设置在独立页面完成，不在对话内逐步引导，避免流程过长
-- 选 Agent 只支持用户自行去 Moss 平台选择后发链接，Bot 不内置推荐列表
+- Agent 由官方集中选择并通过远端指针下发，Bot 绝不让用户挑选或粘贴 Agent
 - 停止跟单必须经过二次确认，防止误操作
 - Bot 不主动平仓，停止跟单仅停止复制新交易，现有持仓由用户自行处理
 - 每次推送通知需简洁，仅包含核心交易信息，不过度打扰用户
@@ -791,18 +716,6 @@ Bot 只是忠实地复制 Agent 的交易行为，不对交易结果负责，也
 3. 手动打开钱包扩展程序，看是否有待确认的签名请求
 4. 刷新页面后重新点击签名按钮
 
-**Q: 发了 Moss 链接但 Bot 无法识别？**
-请确认输入格式正确，Bot 支持两种格式：
-- 完整链接：`moss.site/agent/agt_xxx`（从 Moss Agent 详情页地址栏复制）
-- 纯 Agent ID：`agt_xxx`（直接从 Moss 复制 Agent ID）
-- 不要复制分享按钮生成的短链接或其他格式
-
-**Q: 怎么找到 Agent 链接？**
-1. 前往当前网络对应的 Moss 平台：主网 `https://moss.site/agent?mode=realtime`；测试网 `https://alpha.moss.site/agent?mode=realtime`
-2. 浏览 Agent 列表，点击感兴趣的 Agent 进入详情页
-3. 复制浏览器地址栏中的完整 URL（格式为 `moss.site/agent/agt_xxx`），或仅复制 Agent ID（`agt_xxx`）
-4. 将链接或 ID 粘贴发送给 Bot（两种格式均可）
-
 **Q: 参数怎么填？各参数是什么意思？**
 | 参数 | 含义 | 建议值 |
 |------|------|--------|
@@ -818,13 +731,8 @@ Bot 只是忠实地复制 Agent 的交易行为，不对交易结果负责，也
 
 ### 四、跟单策略
 
-**Q: 选哪个 Agent 好？能推荐吗？**
-Bot 不提供投资建议，也不推荐具体的 Agent。建议你在 Moss 平台上根据以下指标自行判断：
-- **收益率（ROI）**：历史总盈利幅度
-- **最大回撤**：历史最大亏损幅度，反映风险水平
-- **胜率**：盈利交易笔数占总交易笔数的比例
-- **运行时间**：运行越久数据越有参考价值
-- 综合考虑收益和风险，选择与自己风险偏好匹配的 Agent
+**Q: 我能选 Agent 吗？跟的是哪个？**
+不能自选。跟单 Agent 由 SuperClaw 官方集中挑选并下发，服务启动时自动生效。这样做是为了让所有用户跟随当前经过筛选的策略。**注意：官方为你选定 Agent，并不构成投资建议，也不保证收益；所有交易盈亏与风险仍由你自行承担。** 如果官方更新了 Agent，你可以发送「同步最新 Agent」切换到最新的官方 Agent。
 
 **Q: 跟单比例设多少合适？**
 取决于你的风险承受能力：
@@ -837,7 +745,7 @@ Bot 不提供投资建议，也不推荐具体的 Agent。建议你在 Moss 平�
 **强烈建议设置**。止损线可以防止极端行情下损失过大。推荐范围 -20% 至 -30%。即使你看好 Agent 策略，也建议设置一个较宽的止损作为安全网。设为 0 表示关闭止损。
 
 **Q: 能同时跟多个 Agent 吗？**
-目前每个实例只能跟一个 Agent。如需切换，先发送「切换 Agent」停止当前跟单，再配置新 Agent。如果想同时跟多个 Agent，可以部署多个 Bot 实例（使用不同的配置文件）。
+每个实例只跟随当前官方选定的那一个 Agent，用户不能自选，也不能同时跟多个。
 
 **Q: Agent 数据怎么看？各指标什么意思？**
 | 指标 | 含义 |
@@ -898,14 +806,7 @@ Bot 不提供投资建议，也不推荐具体的 Agent。建议你在 Moss 平�
 如果你跟单的 Agent 在 Moss 平台上下架或停止运营：
 - Bot 将无法获取新的交易信号
 - 现有持仓不受影响，需用户自行处理
-- 建议发送「切换 Agent」，重新选择一个活跃的 Agent
-
-**Q: 发的链接解析失败了？**
-请确认：
-- 链接格式为 Moss Agent 详情页链接，或直接发送 `agt_xxx`
-- Agent 确实存在且处于活跃状态
-- 链接是从 Moss Agent 详情页的浏览器地址栏复制的完整 URL
-如果链接确认无误但仍报错，可能是该 Agent 已下架或 Moss 平台暂时不可用。
+- 官方会更新 Agent 指针；你可发送「同步最新 Agent」切换到当前官方 Agent
 
 **Q: Bot 没反应 / 重复发消息没反应？**
 请尝试：
@@ -918,7 +819,7 @@ Bot 不提供投资建议，也不推荐具体的 Agent。建议你在 Moss 平�
 ### 七、超出范围
 
 **Q: 哪个币会涨？该不该买？（投资建议类）**
-Bot 不提供任何投资建议。所有跟单决策和 Agent 选择需要用户自行判断。建议在跟单前充分了解 Agent 策略的风险特征。
+Bot 不提供任何投资建议。跟单 Agent 由官方统一选定，用户无法自选；是否参与跟单、投入多少由用户自行决定并自担风险。
 
 **Q: 帮我平掉某个仓位（手动交易类）**
 Bot 只负责跟单（复制 Agent 交易），不支持单独平仓或自定义交易操作。如需手动平仓，请前往 Hyperliquid 交易所直接操作。
@@ -938,12 +839,12 @@ Bot 只支持跟单模式（复制 Moss Agent 的交易），不支持用户自�
 
 - **所有回复必须使用中文**
 - Always run `service status` first when the user asks about the service state
-- For first-time setup, walk through wallet setup → select Agent → configure params → start
+- For first-time setup, walk through wallet setup → configure params → start (the agent is auto-selected by the platform; never ask the user to pick)
 - After `wallet-generate`, always prompt the user to complete authorization on the Hyperliquid UI and run `check-auth` before starting
 - When `check-auth` fails, explain which authorization is missing and provide the correct Hyperliquid UI URL
 - Never display the full private key — always mask it
 - When showing trade history, present the table output cleanly
-- **FAQ 回答原则**：回答用户问题时，结合用户当前所处阶段（钱包设置/选Agent/配置参数/运行中）给出上下文相关的回复，不要机械地照搬 FAQ 原文，而是自然融入对话
+- **FAQ 回答原则**：回答用户问题时，结合用户当前所处阶段（钱包设置/配置参数/运行中）给出上下文相关的回复，不要机械地照搬 FAQ 原文，而是自然融入对话
 
 ### 防重复启动规则
 

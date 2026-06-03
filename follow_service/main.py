@@ -107,6 +107,16 @@ def cmd_start() -> None:
     cfg.ensure_dirs()
     db.init_db()
 
+    # Resolve the curated agent from the remote (admin-controlled) pointer and
+    # persist it into moss_source.agent_id before we read/validate it below.
+    # Best-effort: on fetch failure the last-known agent_id is kept; if nothing
+    # is configured at all, the moss_source validation below aborts startup.
+    try:
+        from .agent_pointer import sync_agent_pointer
+        sync_agent_pointer()
+    except Exception as exc:  # noqa: BLE001 - never let pointer sync crash startup
+        logger.warning("agent pointer sync raised unexpectedly: %s", exc)
+
     raw_moss_cfg = cfg.get("moss_source", {})
     legacy_bot_id = (
         isinstance(raw_moss_cfg, dict)

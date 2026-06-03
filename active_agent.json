@@ -1,0 +1,5 @@
+{
+  "agent_id": "agt_778345078947ef68",
+  "network": "mainnet",
+  "_comment": "Curated SuperClaw copy-trade agent pointer. Host this at an HTTPS URL you control (raw.githubusercontent.com/superpowerdevk/... or a Cloudflare Worker) and set that URL as `agent_pointer_url` in the skill config. To change the agent for everyone, edit `agent_id` here; running services pick it up on their next start/resume/sync. Only `agent_id` is consumed in v1; `network` is reserved for future use."
+}
