@@ -139,7 +139,7 @@
     "agent_name": ""
   },
   "moss_agent_list_url": "https://moss.site/agent?mode=realtime",
-  "agent_pointer_url": "https://raw.githubusercontent.com/superpowerdevk/superclaw-perps-copytrade/main/active_agent.json",
+  "agent_pointer_url": "https://raw.githubusercontent.com/superpowerdevk/superclaw-perps-btc/main/active_agent.json",
   "update_manifest_url": "https://raw.githubusercontent.com/moss-site/Hyperliquid-copy-trade/main/VERSION.json",
   "require_subaccount": false,
   "subaccount_address": "",
