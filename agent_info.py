@@ -63,6 +63,15 @@ def main() -> None:
                 agent_id = str(_get(ptr).get("agent_id") or "").strip()
             except Exception:  # noqa: BLE001
                 pass
+    # Fallback 2: the repo's own active_agent.json next to this script (source of truth)
+    if not agent_id:
+        import os
+        local = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_agent.json")
+        try:
+            with open(local) as f:
+                agent_id = str(json.load(f).get("agent_id") or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
     if not agent_id:
         print("Could not determine the curated agent id (start the service once, or check agent_pointer_url).")
         sys.exit(0)
