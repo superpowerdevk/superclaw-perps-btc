@@ -6,7 +6,7 @@ description: Manage the SuperClaw BTC perpetual copy-trading service on Hyperliq
 # SuperClaw BTC Perps Copy-Trade — Interaction Flow (EN)
 
 > For SuperClaw / OpenClaw skill development. Describes the Bot's full in-conversation behavior.
-> This skill copy-trades a single curated **BTC-perp** agent on Hyperliquid. For isolation it runs on a **dedicated Hyperliquid account** (a fresh wallet used only for BTC) — separate from the user's other SuperClaw skills.
+> This skill copy-trades a single curated **BTC-perp** agent on Hyperliquid. It runs on its **own dedicated Hyperliquid account** — a **fresh wallet funded with USDC**, separate from every other SuperClaw skill (required: HL caps agents per account, so each skill needs its own wallet).
 > The followed agent is selected centrally by the SuperClaw admin. At service start the CLI resolves it from the remote pointer `agent_pointer_url` and writes it into `moss_source.agent_id`. The user never picks, inputs, or changes the agent.
 
 ---
@@ -17,7 +17,7 @@ After installing the SuperClaw BTC Perps Copy-Trade skill, the user can — via 
 
 The flow has three stages:
 
-1. Wallet setup (connect a **dedicated** main wallet + generate Agent Wallet + sign & register)
+1. Wallet setup (connect a **fresh wallet** funded with **USDC**, generate Agent Wallet + sign & register)
 2. Configure copy-trade parameters (ratio, stop-loss, slippage)
 3. Run & manage (status, pause, sync latest agent, view agent track record, stop)
 
@@ -30,14 +30,18 @@ This skill differs from the generic copy-trade flow in three ways. Everything el
 ### 1. Single asset: BTC only
 `allowed_coins` is locked to `["BTC"]`. The curated agent trades BTC perps; the skill only ever places BTC orders. Never widen the whitelist.
 
-### 2. Dedicated account (isolation)
-This skill runs on its **own dedicated Hyperliquid account** — a fresh wallet used only for BTC copy-trading — so BTC margin and PnL are fully isolated from the user's other SuperClaw skills. There is no separate sub-account; trades execute directly on that wallet's account (`require_subaccount` is `false`).
+### 2. Dedicated Hyperliquid account — REQUIRED, one fresh wallet per skill
+This skill must run on its **own Hyperliquid account**, i.e. its **own wallet, separate from every other SuperClaw perps skill.** This is mandatory for two reasons: (1) it isolates this skill's margin and risk, and (2) Hyperliquid limits how many trading agents a single account can authorize — **as low as 3 for a new account** — so reusing one wallet across skills WILL fail with "too many agents" once the user passes that limit. One fresh wallet per skill means each account carries only one agent, and the limit never applies.
 
-- During setup, the Bot must tell the user to connect/authorize with a **new or dedicated wallet** for this skill — **not** a wallet already used by another SuperClaw skill. That dedicated wallet is what provides isolation.
-- Trades execute directly on that wallet's Hyperliquid account.
-- Funding: the user funds **that dedicated wallet's Hyperliquid account** with USDC (Hyperliquid deposit). Be explicit that funds go to the dedicated wallet's HL account — not an on-chain transfer to an address.
+**The Bot MUST walk the user through this explicitly before authorization — do not assume they know:**
 
-Setup order for this skill: **wallet setup (dedicated wallet) → fund it → configure parameters → start.**
+1. **Use a brand-new wallet for this skill.** Not the wallet used for any other SuperClaw skill. In their wallet app (MetaMask, Rabby, etc.) they can create a new account/address in a couple of taps, or use a different wallet they control. If the user authorizes from a wallet already used by another skill and hits **"Too many extra agents… limit is 3,"** that is exactly this — tell them to switch to a new wallet for this skill.
+2. **Fund it with USDC only.** Every Hyperliquid perp is **USDC-margined** — the user does **NOT** buy or deposit BTC (or BNB/ETH/HYPE/etc.). They deposit **USDC** into that new wallet's Hyperliquid account (deposit/bridge on the Hyperliquid app). That USDC is the collateral for every position this skill copies, regardless of which asset.
+3. **Authorize this skill's agent from that new wallet** (Agent + Builder), then send that wallet's address.
+
+The Bot must NOT let the user reuse a wallet across skills, and must NOT tell them to deposit the traded asset — it is always **USDC** as collateral.
+
+Setup order for this skill: **new wallet → deposit USDC → authorize agent → configure → start.**
 
 ### 3. Agent track record (`agent-info`)
 When the user asks to see the agent's performance / track record / "what am I getting into," the Bot runs `agent-info` (no signature needed; works before funding) and presents the card. It pulls live metrics from the public Moss endpoint:
@@ -1000,3 +1004,72 @@ When the user asks about "auto-restart," "keep the service alive," "relaunch if 
 
 5. **User wording**
    - "Once enabled, I install a system-level watchdog on this machine that checks every minute; it only relaunches if the service should be running but exited abnormally. If you stop or pause yourself, it won't relaunch."
+
+---
+
+## Onboarding output (REQUIRED — use these exact formats)
+
+When the user installs/sets up this skill and the Agent Wallet has been generated, the Bot MUST use the formats below. Fill `<AGENT_WALLET>` and `<NETWORK>` from the generated wallet at runtime. Do not improvise a different layout.
+
+### A. Setup message — send on install, right after the Agent Wallet is generated
+
+> SuperClaw BTC Perps — let's get you set up 🚀
+> ~3 minutes. The agent copy-trades BTC for you. You stay in control and can stop anytime.
+>
+> **🔑 Your Agent Wallet** (created for you)
+> `<AGENT_WALLET>` · <NETWORK>
+>
+> ### 1️⃣ Create a new wallet
+> Make a brand-new wallet just for this skill (don't reuse one from another SuperClaw skill). It lives on the **Arbitrum** chain.
+>
+> ### 2️⃣ Open Hyperliquid & add USDC
+> Sign in to Hyperliquid with that new wallet — **email, OKX Wallet, MetaMask,** or any option they show. Then deposit **USDC** (the only thing you add — never BTC itself). Use **USDC on Arbitrum** or **USDC on HyperEVM**.
+> → https://app.hyperliquid.xyz
+>
+> ### 3️⃣ Authorize trading
+> Open the link below with that same wallet and sign **Agent + Builder**. This lets the bot place BTC trades for you — no funds move, just permission.
+> → https://moss.site/hyperliquid/authorize/<AGENT_WALLET>
+>
+> ### 4️⃣ Send me your wallet address
+> Reply with the `0x…` address from step 1, and I'll start copying BTC trades.
+>
+> ✅ I pick the trading agent automatically — you don't choose one. Curious first? Just ask **"tell me about this agent."**
+
+Hard rules for the setup message:
+- Always include the actual generated Agent Wallet address + network, and the full authorize URL built from that address.
+- NEVER tell the user to reuse a wallet from another SuperClaw skill. If they report **"Too many extra agents… limit is 3,"** that is Hyperliquid's per-account agent cap — tell them to use a brand-new wallet for this skill.
+- NEVER tell the user to deposit BTC — collateral is always **USDC** (Arbitrum or HyperEVM).
+- After the user says "authorized" and sends their wallet address, do NOT ask them to pick an agent — it is curated and resolved automatically.
+
+### B. Post-setup summary — send once the service is started / live
+
+> **You're live! 🎉 Here's everything you can ask me — just type it plainly:**
+>
+> ### 📊 Check on it
+> - **"status"** — running state, balance, current position
+> - **"show my position"** — your open BTC trade right now
+> - **"how am I doing?"** — profit/loss summary
+> - **"tell me about this agent"** — the agent's track record (ROI, drawdown, win rate)
+>
+> ### ⚙️ Adjust your risk
+> - **"set follow ratio to 50%"** — copy at half the agent's trade size (lower = smaller, safer)
+> - **"set stop loss to 20%"** — auto-close a trade if it drops 20%
+> - **"show my settings"** — current ratio, stop loss, slippage
+>
+> ### ⏯️ Control it
+> - **"pause"** — stop copying new trades (open ones stay)
+> - **"resume"** — start copying again
+> - **"stop"** — shut it down
+>
+> ### 🔔 Auto-updates (optional)
+> Want position summaries automatically? Tell me how often: **every 5 min · 15 min · 30 min · 1 hour · 4 hours · 12 hours · daily**
+> - e.g. **"update me every 15 minutes"**
+> - **"stop updates"** — turn them off
+>
+> 💡 New here? Start with **"how am I doing?"** anytime.
+
+### C. Auto-update (cron) behavior
+- After the post-setup summary, proactively offer the auto-update interval menu.
+- When the user picks an interval, schedule a recurring task (OpenClaw cron) at that interval that fetches status + current position and sends a SHORT summary: side/size/entry, unrealized PnL, balance, running state.
+- Supported intervals: 5m, 15m, 30m, 1h, 4h, 12h, daily. Confirm the interval that was set and remind them they can say "stop updates."
+- On "stop updates," cancel the scheduled task and confirm.
