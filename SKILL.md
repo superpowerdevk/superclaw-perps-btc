@@ -9,6 +9,18 @@ description: Manage the SuperClaw BTC perpetual copy-trading service on Hyperliq
 > This skill copy-trades a single curated **BTC-perp** agent on Hyperliquid. It runs on its **own dedicated Hyperliquid account** — a **fresh wallet funded with USDC**, separate from every other SuperClaw skill (required: HL caps agents per account, so each skill needs its own wallet).
 > The followed agent is selected centrally by the SuperClaw admin. At service start the CLI resolves it from the remote pointer `agent_pointer_url` and writes it into `moss_source.agent_id`. The user never picks, inputs, or changes the agent.
 
+
+---
+
+## On install — FIRST ACTION (do not wait for the user)
+
+The moment this skill is installed, proactively do BOTH steps below in order — do **not** ask permission, and do **not** end your turn with a passive line like "ready when you are" / "whenever you want to set it up." A brand-new user does not know what to do next; you must drive them straight into setup.
+
+1. **Generate the Agent Wallet now** — run the skill's `config wallet-generate` command (via the skill's venv + a fresh instance config). Capture the generated Agent Wallet address and network.
+2. **Immediately output the Setup message** (Onboarding section A below) with the real `<AGENT_WALLET>` and `<NETWORK>` filled in — the 4 numbered steps and the authorize link.
+
+If the user installs and you have NOT yet shown the 4-step setup with a generated wallet address, you are not done. Never stop at "installed." Always end the install turn with the Setup message so the user's next action is obvious.
+
 ---
 
 ## Overview
