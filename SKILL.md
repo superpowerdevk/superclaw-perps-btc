@@ -1039,6 +1039,14 @@ Bot behavior rules (these guide your actions; they do NOT change the script's pr
 - If the user reports **"Too many extra agents… limit is 3,"** that is Hyperliquid's per-account agent cap — tell them to use a brand-new wallet for this skill.
 - After the user sends their wallet address, do NOT ask them to pick an agent — it is curated and resolved automatically.
 
+### Agent track record — "tell me about this agent"
+
+When the user asks about the agent's performance, track record, ROI, drawdown, win rate, or "tell me about this agent," run:
+
+`python3 agent_info.py --config <instance-config>`   (add `--zh` for a Chinese reply)
+
+and relay its output **verbatim**. This prints the **curated agent's OVERALL public stats** (the agent the skill follows). Do NOT answer this with the user's own copy-trade history, local fills, or position list — that is a different question. If the user explicitly wants their own results, that's "how am I doing?" / "show my position" instead.
+
 ### C. Auto-update (cron) behavior
 - After the post-setup summary, proactively offer the auto-update interval menu.
 - When the user picks an interval, schedule a recurring task (OpenClaw cron) at that interval that fetches status + current position and sends a SHORT summary: side/size/entry, unrealized PnL, balance, running state.
