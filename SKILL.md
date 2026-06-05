@@ -1,95 +1,124 @@
 ---
-name: superclaw-perps-copytrade
-description: Manage the SuperClaw Hyperliquid copy-trading service. Use when the user wants to start/stop/check the follow service, generate an agent wallet, complete authorization, view trade history/stats, or sync to the latest curated agent. The followed agent is selected centrally by the SuperClaw admin and resolved automatically at service start - the user never picks a trader.
+name: superclaw-perps-btc
+description: Manage the SuperClaw BTC perpetual copy-trading service on Hyperliquid. Use when the user wants to start/stop/check the follow service, generate an agent wallet, complete authorization, view the curated agent's track record, view trade history/stats, or sync to the latest curated agent. The followed agent trades BTC perps only, runs on a dedicated Hyperliquid account, is selected centrally by the SuperClaw admin, and is resolved automatically at service start - the user never picks a trader.
 ---
 
-# SuperClaw Copy-Trade — 交互链路文档
+# SuperClaw BTC Perps Copy-Trade — Interaction Flow (EN)
 
-> 适用于 SuperClaw / OpenClaw Skill 开发，描述 Bot 在对话中的完整交互逻辑。
-> 跟单 Agent 由官方集中选择，服务启动时通过远端指针 `agent_pointer_url` 自动解析并写入 `moss_source.agent_id`；用户不选择、不输入、也无法更换 Agent。
-
----
-
-## 概述
-
-用户安装 SuperClaw Copy-Trade Skill 后，可通过对话在 Hyperliquid 上自动跟随由官方集中挑选的交易 Agent。跟单 Agent **不由用户选择**——服务启动/恢复时会从官方远端指针自动解析当前生效的 Agent。
-
-整体流程分为三个阶段：
-
-1. 钱包设置（连接主钱包 + 生成 Agent Wallet + 签名注册）
-2. 配置跟单参数（比例、止损、滑点）
-3. 运行与管理（状态查询、暂停、同步最新 Agent、停止）
-
-> **Agent 选择**：用户无需、也无法在对话中挑选跟单对象。当前生效的 Agent 由官方通过 `agent_pointer_url` 远端指针下发，服务启动时自动写入配置。用户更换设备/重装后拉到的也是当前官方 Agent。
-
-## 重要限制
-
-1. **币种限制**：当前默认支持主流币：BTC, ETH, SOL, BNB, APT, ATOM, ARB, AVAX, ADA, BCH, DOGE, DOT, FIL, HBAR, LINK, LTC, NEAR, OP, SUI, TRX, XRP, UNI；通过 `allowed_coins` 白名单控制，空列表表示不限制
-2. **余额监控与告警**：服务启动后会自动监控账户余额。当 withdrawable 低于 `low_balance_threshold_usd`（默认 10 USDC）时入库告警，由 Bot 轮询拉取后提醒用户充值。告警频率：每天最多 3 次，每次间隔至少 10 分钟
-
-## 对话输出硬性规则
-
-1. **安装完成后直接给授权链接**：用户要求安装/更新/测试跟单 skill，且已生成 Agent Wallet 后，回复必须包含 Agent Wallet 地址、网络、授权页面完整 URL（从配置中的 `hl_authorize_url` 拼接 `<wallet_address>`）。不要只说“去授权页面”，也不要等用户追问“授权页面是多少”。
-2. **授权成功后只收集主钱包地址**：用户说“授权成功”后，提示他发送主钱包地址即可。**不要**索要、提示或接受用户提供的 Agent ID/链接——跟单 Agent 由官方集中下发，服务启动时自动解析，用户无需选择。
-3. **跟单启动成功后输出简洁摘要**：启动成功消息保持简洁，但需比日常推送信息更完整，至少包含 Agent、Agent 持仓、初始化执行结果、跟单比例、滑点、币种白名单、主钱包地址、Agent Wallet 地址、Follower ID（若有）、网络和运行状态。不要默认输出止损/止盈或轮询间隔，除非用户刚配置或主动询问。
-4. **讨论充值时必须明确充值目标**：当用户询问充值、补保证金、余额不足怎么办时，Bot 必须明确提醒“请充值到主钱包对应的 Hyperliquid 账户”，不要让用户误解成直接链上转账到主钱包地址本身。
-5. **永远不要让用户挑选 Agent**：跟单 Agent 由官方集中选择并通过远端指针下发。Bot 不得索要 `agt_xxx`、不得提供 Agent 列表页面、不得让用户粘贴链接。若用户主动要求“换一个 Agent / 跟某某”，明确说明本服务的 Agent 由官方统一挑选，用户可发送「同步最新 Agent」拉取当前官方 Agent，但不能自选具体对象。
+> For SuperClaw / OpenClaw skill development. Describes the Bot's full in-conversation behavior.
+> This skill copy-trades a single curated **BTC-perp** agent on Hyperliquid. For isolation it runs on a **dedicated Hyperliquid account** (a fresh wallet used only for BTC) — separate from the user's other SuperClaw skills.
+> The followed agent is selected centrally by the SuperClaw admin. At service start the CLI resolves it from the remote pointer `agent_pointer_url` and writes it into `moss_source.agent_id`. The user never picks, inputs, or changes the agent.
 
 ---
 
-## 背景知识
+## Overview
 
-**Agent Wallet 机制**
-Hyperliquid 提供官方 Agent 机制：用户主钱包授权一个独立的 Agent Wallet，由 Bot 持有其私钥，代替用户在 Hyperliquid 上提交交易。主钱包资产不会被直接操作，Agent 授权可随时吊销。
+After installing the SuperClaw BTC Perps Copy-Trade skill, the user can — via conversation — automatically follow a centrally-curated **BTC-perp** agent on Hyperliquid. For isolation, this skill runs on its **own dedicated Hyperliquid account** (a fresh wallet used only for BTC). The followed agent is **not chosen by the user**; it is resolved automatically from the official remote pointer at service start/resume.
 
-**跟单逻辑**
-官方集中选定一个 Agent（通过 `agent_pointer_url` 远端指针下发）后，Bot 监听该 Agent 的交易行为（通过 Moss Source-Core 2.0 API 的 WS + REST fills），按用户设置的比例，用 Agent Wallet 在 Hyperliquid 上同步执行 delta 仓位对齐。用户不参与 Agent 选择。
+The flow has three stages:
 
-**核心机制：基线 + Delta 对齐**
-- 启动时记录 Agent 当前仓位作为基线（baseline）
-- 后续检测到 Agent 仓位变化时，计算 delta 并按账户比例在 HL 上对齐
-- 方向钳制：不会反向开仓，最多平到 0
-- Agent 平仓后基线自动归零，可跟新方向
+1. Wallet setup (connect a **dedicated** main wallet + generate Agent Wallet + sign & register)
+2. Configure copy-trade parameters (ratio, stop-loss, slippage)
+3. Run & manage (status, pause, sync latest agent, view agent track record, stop)
+
+> **Agent selection**: the user neither needs to nor can pick a trader in conversation. The active agent is delivered by the admin via the `agent_pointer_url` remote pointer and written into config at service start. After a device change/reinstall the user still pulls the current official agent.
+
+## BTC skill specifics
+
+This skill differs from the generic copy-trade flow in three ways. Everything else (wallet setup, parameters, run/manage, FAQ) below still applies.
+
+### 1. Single asset: BTC only
+`allowed_coins` is locked to `["BTC"]`. The curated agent trades BTC perps; the skill only ever places BTC orders. Never widen the whitelist.
+
+### 2. Dedicated account (isolation)
+This skill runs on its **own dedicated Hyperliquid account** — a fresh wallet used only for BTC copy-trading — so BTC margin and PnL are fully isolated from the user's other SuperClaw skills. There is no separate sub-account; trades execute directly on that wallet's account (`require_subaccount` is `false`).
+
+- During setup, the Bot must tell the user to connect/authorize with a **new or dedicated wallet** for this skill — **not** a wallet already used by another SuperClaw skill. That dedicated wallet is what provides isolation.
+- Trades execute directly on that wallet's Hyperliquid account.
+- Funding: the user funds **that dedicated wallet's Hyperliquid account** with USDC (Hyperliquid deposit). Be explicit that funds go to the dedicated wallet's HL account — not an on-chain transfer to an address.
+
+Setup order for this skill: **wallet setup (dedicated wallet) → fund it → configure parameters → start.**
+
+### 3. Agent track record (`agent-info`)
+When the user asks to see the agent's performance / track record / "what am I getting into," the Bot runs `agent-info` (no signature needed; works before funding) and presents the card. It pulls live metrics from the public Moss endpoint:
+
+- ROI, overall PnL, max profit
+- **Max drawdown and win rate are always shown next to ROI** — never present ROI alone.
+- Profit factor, trade count, liquidations, status, days running.
+
+Always close the agent-info reply with: the platform selecting this agent is **not investment advice** and guarantees no profit; past performance does not predict future results; the user bears all risk.
+
+CLI: `agent-info` (English). The Bot weaves the numbers into a natural reply rather than dumping raw output.
+
+
+## Key limits
+
+1. **Coin scope**: locked to **BTC** only via the `allowed_coins` whitelist (`["BTC"]`). The curated agent trades BTC perps; do not widen the whitelist for this skill.
+2. **Balance monitoring & alerts**: once the service starts it monitors account balance. When `withdrawable` drops below `low_balance_threshold_usd` (default 10 USDC) an alert is written to the DB; the Bot polls and reminds the user to top up. Alert cadence: at most 3/day, at least 10 minutes apart.
+
+## Hard output rules
+
+1. **Give the authorization link immediately after install**: when the user asks to install/update/test the copy-trade skill and the Agent Wallet has been generated, the reply must include the Agent Wallet address, the network, and the full authorization page URL (built from `hl_authorize_url` + `<wallet_address>`). Don't just say "go to the authorization page," and don't wait for the user to ask "what's the URL."
+2. **After authorization, collect only the main wallet address**: when the user says "authorized," prompt them to send their main wallet address. **Do not** ask for, suggest, or accept an agent ID/link from the user — the agent is delivered centrally and resolved automatically at service start; the user does not choose.
+3. **Concise summary after a successful start**: keep the start-success message concise but more complete than routine pushes; include at least the agent, the agent's position, init result, follow ratio, slippage, coin whitelist, main wallet address, Agent Wallet address, Follower ID (if any), network, and run state. Don't include stop-loss/take-profit or poll interval by default unless the user just configured them or asks.
+4. **Be explicit about the top-up target**: when the user asks about topping up, adding margin, or what to do on low balance, the Bot must clearly say "top up the Hyperliquid account that corresponds to your main wallet" — don't let them think they should send an on-chain transfer to the main wallet address itself.
+5. **Never let the user pick the agent**: the agent is centrally selected and delivered via the remote pointer. The Bot must not ask for `agt_xxx`, must not provide an agent list page, and must not let the user paste a link. If the user asks to "switch agents / follow so-and-so," explain that this service's agent is chosen centrally by the platform; the user can send "Sync latest agent" to pull the current official agent, but cannot select a specific one.
 
 ---
 
-## 环境准备
+## Background knowledge
 
-首次使用需初始化 Python 虚拟环境并安装依赖：
+**Agent Wallet mechanism**
+Hyperliquid provides an official agent mechanism: the user's main wallet authorizes a separate Agent Wallet, whose private key the Bot holds, to submit trades on Hyperliquid on the user's behalf. The main wallet's assets are never operated directly, and the agent authorization can be revoked at any time.
+
+**Copy-trade logic**
+Once the platform centrally selects an agent (delivered via the `agent_pointer_url` remote pointer), the Bot watches that agent's trading activity (via the Moss Source-Core 2.0 API — WS + REST fills) and, scaled by the user's chosen ratio, mirrors it on Hyperliquid through delta position alignment using the Agent Wallet. The user is not involved in agent selection.
+
+**Core mechanism: baseline + delta alignment**
+- On start, the agent's current positions are recorded as a baseline.
+- When the agent's positions change, a delta is computed and aligned on HL scaled by the account ratio.
+- Direction clamping: never opens in the opposite direction — at most closes to 0.
+- After the agent flattens, the baseline resets to zero and a new direction can be followed.
+
+---
+
+## Environment setup
+
+First-time use requires initializing a Python virtual environment and installing dependencies:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-配置文件通过 `wallet-generate` 命令自动创建（基于 `config_default.json` 模板）：
+The config file is created automatically by `wallet-generate` (based on the `config_default.json` template):
 
 ```bash
 .venv/bin/python cli.py config wallet-generate
-# 生成 ~/.hyperliquid-copy-trade/<钱包地址后6位>/config_<钱包地址后6位>.json，并自动配置实例隔离路径
+# creates ~/.hyperliquid-copy-trade/<last 6 of wallet>/config_<last 6>.json and sets per-instance isolated paths automatically
 ```
 
-**重要**：禁止使用 `config.json` 和 `config_default.json`，所有命令必须通过 `--config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json` 指定具体配置文件。
-**重要**：Agent Wallet 配置默认保存在 `~/.hyperliquid-copy-trade/<6位>/config_<6位>.json`，不保存在 OpenClaw skill 目录下；对应实例的日志、数据库和 PID 也默认保存在同一个 `~/.hyperliquid-copy-trade/<6位>/` 目录下，避免 skill 升级、覆盖、删除或系统清理 `/tmp` 后找不到关键数据。
-**网络模板**：`dev` 分支默认测试网；显式模板为 `config_default.testnet.json` 和 `config_default.mainnet.json`，完整参数矩阵见 `docs/network-config.md`。Bot 输出网络和授权链接时应读取当前配置，不要写死主网或测试网文案。
+**Important**: `config.json` and `config_default.json` are forbidden; every command must point at a specific config via `--config ~/.hyperliquid-copy-trade/<6>/config_<6>.json`.
+**Important**: the Agent Wallet config is stored by default at `~/.hyperliquid-copy-trade/<6>/config_<6>.json`, not under the OpenClaw skill directory; that instance's logs, database, and PID are also stored under the same `~/.hyperliquid-copy-trade/<6>/` directory, so a skill upgrade/overwrite/delete or a `/tmp` cleanup won't lose critical data.
+**Network template**: the `dev` branch defaults to testnet; explicit templates are `config_default.testnet.json` and `config_default.mainnet.json`, full parameter matrix in `docs/network-config.md`. When the Bot outputs the network and authorization link it should read the current config, not hard-code mainnet or testnet wording.
 
-## 技术实现
+## Technical implementation
 
-项目根目录包含 `cli.py` 和 `follow_service/`。所有操作通过 `.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json` 执行。
+The project root contains `cli.py` and `follow_service/`. All operations run via `.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json`.
 
-**维护约定**：`dist/` 目录是自动生成产物，修改代码、配置模板或 Skill 说明时不要直接编辑 `dist/`；只改源文件（`follow_service/`、`cli.py`、`config_default.json`、`.claude/skills/**/SKILL.md`），后续由打包流程生成 `dist/`。
+**Maintenance convention**: the `dist/` directory is a generated artifact; when changing code, config templates, or skill docs, don't edit `dist/` directly — only edit the source (`follow_service/`, `cli.py`, `config_default.json`, `.claude/skills/**/SKILL.md`); `dist/` is produced later by the packaging step.
 
-### 核心模块
+### Core modules
 
-| 模块 | 职责 |
-|------|------|
-| `moss_client.py` | Moss REST API 客户端（Follower 钱包签名鉴权） |
-| `moss_poller.py` | fills 增量轮询 + 基线初始化 + delta 对齐触发 |
-| `trader.py` | Hyperliquid 下单执行（IOC 限价单 + delta 对齐算法） |
-| `database.py` | SQLite 存储（基线、事件、交易记录、账户快照） |
-| `balance_tracker.py` | 账户余额定时快照 |
+| Module | Responsibility |
+|--------|----------------|
+| `moss_client.py` | Moss REST API client (follower wallet-signature auth) |
+| `moss_poller.py` | incremental fills polling + baseline init + delta-alignment trigger |
+| `trader.py` | Hyperliquid order execution (IOC limit orders + delta-alignment algorithm) |
+| `database.py` | SQLite storage (baseline, events, trade records, account snapshots) |
+| `balance_tracker.py` | periodic account-balance snapshots |
 
-### Moss 信号源配置（config_<6位>.json）
+### Moss signal-source config (config_<6>.json)
 
 ```json
 {
@@ -103,219 +132,219 @@ python3 -m venv .venv
 }
 ```
 
-### Moss Follower 鉴权
+### Moss follower auth
 
-当前版本使用 Follower 钱包签名鉴权，不再需要配置 `api_key` / `api_secret`。服务启动时会使用 Agent Wallet 私钥向 Moss 注册 Follower，并用钱包签名访问当前官方 Agent 的只读仓位、账户和成交数据。
+The current version uses follower wallet-signature auth; `api_key` / `api_secret` are no longer needed. On service start it registers a follower with Moss using the Agent Wallet private key, and uses the wallet signature to read the current official agent's read-only positions, account, and fills.
 
 ---
 
-## 阶段一：钱包设置
+## Stage 1: Wallet setup
 
-### 触发条件
-用户安装 Skill 后首次对话，或主动发送「开始」「设置钱包」等关键词。
+### Trigger
+First conversation after the user installs the skill, or the user sends a keyword like "Start" / "Set up wallet."
 
-### Bot 首条消息
-介绍 Skill 功能，引导用户进入钱包设置页面（跳转至独立页面完成，非对话内完成）。
+### Bot's first message
+Introduce the skill and guide the user to the wallet-setup page (completed on a separate page, not inline in chat).
 
-若用户是让 Bot 安装/更新 skill 并准备跟单服务，安装完成并生成 Agent Wallet 后，必须直接给出授权页面完整 URL：
+If the user asked the Bot to install/update the skill and prepare the copy-trade service, then after install and Agent Wallet generation the reply must include the full authorization URL:
 
 ```
-已安装新 skill 并生成钱包 ✅
+New skill installed and wallet generated ✅
 
 • Agent Wallet: 0xAGENT_ADDRESS
-• 网络: 测试网
-• 授权页面: https://alpha.moss.site/hyperliquid/authorize/0xAGENT_ADDRESS
+• Network: testnet
+• Authorization page: https://alpha.moss.site/hyperliquid/authorize/0xAGENT_ADDRESS
 
-请用主钱包打开授权页面完成授权。授权成功后，把主钱包地址发给我即可——跟单 Agent 已由官方自动选定，你无需选择。
+Open the authorization page with your main wallet to complete authorization. Once authorized, just send me your main wallet address — the agent is selected automatically by the platform, so you don't need to choose one.
 ```
 
-### 钱包设置页面（独立页面，顺序执行）
+### Wallet-setup page (separate page, sequential)
 
-**Step 1 — 连接主钱包**
-- 展示钱包选项：MetaMask / Phantom / WalletConnect
-- 用户选择后点击「连接钱包」
-- 连接成功后显示主钱包地址，进入下一步
+**Step 1 — Connect main wallet**
+- Show wallet options: MetaMask / Phantom / WalletConnect
+- User selects and clicks "Connect wallet"
+- On success, show the main wallet address and proceed
 
-**Step 2 — 生成 Agent Wallet**
-- 说明 Agent Wallet 的作用与安全性
-- 用户点击「生成 Agent Wallet」
-- 系统生成新密钥对，展示 Agent Wallet 地址
-- 私钥加密存储，仅用于 Hyperliquid 下单
+**Step 2 — Generate Agent Wallet**
+- Explain the Agent Wallet's purpose and safety
+- User clicks "Generate Agent Wallet"
+- System generates a new keypair and shows the Agent Wallet address
+- The private key is stored encrypted, used only for Hyperliquid order placement
 
-**Step 3 — 主钱包签名**
-- 说明签名用途：在 Hyperliquid 登记主钱包与 Agent Wallet 的授权关系
-- 强调：不会转移任何资产，只是一条链上记录
-- 用户在钱包弹窗中确认签名
-- 签名成功后，显示完成状态，提供「返回对话」按钮
+**Step 3 — Main wallet signature**
+- Explain the signature's purpose: register the authorization relationship between the main wallet and the Agent Wallet on Hyperliquid
+- Emphasize: no assets are transferred, this is just an on-chain record
+- User confirms the signature in the wallet popup
+- On success, show the completed state and a "Back to chat" button
 
-### 返回对话后
-- 用户侧自动发送消息：「钱包设置已完成 ✓」
-- Bot 验证成功，回复确认消息：
-  - **主钱包地址**（main_address）：0xMAIN_ADDRESS（持有资金的账户）
-  - **Agent Wallet 地址**（wallet_address）：0xAGENT_ADDRESS（代理下单的账户）
-  - 说明：主钱包授权 Agent Wallet 代为交易，资金仍在主钱包中
-- **重要提醒**：Bot 需明确告知用户"请确认主钱包地址正确，后续跟单资金将从该账户扣除"
-- 引导用户进入下一阶段：配置跟单参数（Agent 已由官方自动选定，无需用户挑选）
+### After returning to chat
+- The user side auto-sends: "Wallet setup complete ✓"
+- The Bot verifies and replies with a confirmation:
+  - **Main wallet address** (main_address): 0xMAIN_ADDRESS (the account holding the funds)
+  - **Agent Wallet address** (wallet_address): 0xAGENT_ADDRESS (the account that places orders on your behalf)
+  - Note: the main wallet authorizes the Agent Wallet to trade for it; funds stay in the main wallet
+- **Important reminder**: the Bot must clearly tell the user "confirm your main wallet address is correct — copy-trade funds will be drawn from this account."
+- Guide the user to the next stage: configure copy-trade parameters (the agent is already auto-selected by the platform; no user choice needed)
 
-### 对应 CLI 操作
+### Matching CLI operations
 
 ```bash
-# 生成 Agent Wallet
+# Generate Agent Wallet
 .venv/bin/python cli.py config wallet-generate
 
-# 设置主钱包地址（钱包设置页面应自动完成，若未自动写入则需手动执行）
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json config set main_address <0xMAIN_ADDRESS>
+# Set the main wallet address (the wallet-setup page should do this automatically; run manually if not written)
+.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json config set main_address <0xMAIN_ADDRESS>
 
-# 验证授权（在授权页面完成授权后执行）
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json config check-auth
+# Verify authorization (run after completing authorization on the auth page)
+.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json config check-auth
 ```
 
-**注意**：钱包设置页面连接主钱包后，应自动将 `main_address` 写入配置。Bot 在"返回对话后"需通过 `config show` 确认 `main_address` 已正确配置，若为空则提示用户手动提供主钱包地址。若用户只说“授权成功”但没有提供主钱包地址，Bot 应回复：“授权成功后，请把主钱包地址发我即可——跟单 Agent 已由官方自动选定，你无需选择。”
+**Note**: after the wallet-setup page connects the main wallet, it should write `main_address` into config automatically. After "Back to chat," the Bot should confirm via `config show` that `main_address` is set; if empty, prompt the user for it. If the user only says "authorized" without giving the main wallet address, the Bot should reply: "Once authorized, please send me your main wallet address — the agent is selected automatically by the platform, so you don't need to choose one."
 
-授权需要用户在配置中的 `hl_authorize_url` 页面完成，URL 中末尾地址替换为实际的 Agent Wallet 地址。`dev` 分支默认测试网：
+Authorization must be completed by the user on the `hl_authorize_url` page in config, with the trailing address replaced by the actual Agent Wallet address. The `dev` branch defaults to testnet:
 
 ```
 https://alpha.moss.site/hyperliquid/authorize/<wallet_address>
 ```
 
-例如，若 Agent Wallet 地址为 `0xAbCd...1234`，授权链接为：
+For example, if the Agent Wallet address is `0xAbCd...1234`, the authorization link is:
 
 ```
 https://alpha.moss.site/hyperliquid/authorize/0xAbCd...1234
 ```
 
-**获取 wallet_address 方式**：
+**Get the wallet_address**:
 ```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json config show   # 查看 wallet_address 字段
+.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json config show   # view the wallet_address field
 ```
 
-需完成两项授权：
-1. **Agent 授权** — 授权 `wallet_address` 为主账户的 Agent
-2. **Builder 授权** — 授权当前网络对应的 Builder 地址（见 `docs/network-config.md`）
+Two authorizations are required:
+1. **Agent authorization** — authorize `wallet_address` as the main account's agent
+2. **Builder authorization** — authorize the network's builder address (see `docs/network-config.md`)
 
-### 异常分支
-| 情况 | Bot 处理 |
-|------|----------|
-| 用户询问「什么是 Agent Wallet」 | 解释机制，确认安全性后继续 |
-| 用户询问「签名是做什么的」 | 解释链上授权关系，强调不转移资产 |
-| 用户询问「这安全吗」 | 说明私钥加密存储，主钱包不被直接操作，随时可吊销 |
-| 用户点击返回 | 返回对话页，流程暂停，下次可继续 |
+### Edge branches
+| Situation | Bot handling |
+|-----------|--------------|
+| User asks "what is an Agent Wallet" | explain the mechanism, confirm safety, continue |
+| User asks "what is the signature for" | explain the on-chain authorization relationship, emphasize no asset transfer |
+| User asks "is this safe" | explain the private key is stored encrypted, the main wallet is never operated directly, revocable any time |
+| User clicks back | return to chat, flow paused, resumable next time |
 
 ---
 
-## Agent 选择（自动，无用户交互）
+## Agent selection (automatic, no user interaction)
 
-跟单 Agent 由官方集中选择，**没有独立的“选择 Agent”阶段**。
+The agent is centrally selected by the platform — there is **no separate "select agent" stage**.
 
-- 服务启动/恢复时，CLI 会从 `agent_pointer_url` 远端指针解析当前官方 Agent，并写入 `moss_source.agent_id`。
-- 远端指针不可达时，沿用配置中“上次已知”的 `agent_id`；若从未解析过则启动失败并提示。
-- 用户可随时发送「同步最新 Agent」（`service switch`）平仓并切换到当前最新官方 Agent。
+- On service start/resume, the CLI resolves the current official agent from the `agent_pointer_url` remote pointer and writes it into `moss_source.agent_id`.
+- If the remote pointer is unreachable, the last-known `agent_id` in config is reused; if it was never resolved, startup fails with a clear message.
+- The user can send "Sync latest agent" (`service switch`) at any time to flatten and switch to the current latest official agent.
 
-钱包设置完成后，**直接进入下一阶段（配置跟单参数）**，不要要求用户选择或粘贴 Agent。
+After wallet setup, **go straight to the next stage (configure copy-trade parameters)** — do not ask the user to choose or paste an agent.
 
-## 阶段二：配置跟单参数
+## Stage 2: Configure copy-trade parameters
 
-### 触发条件
-钱包设置完成后（Agent 已由官方自动选定）。
+### Trigger
+After wallet setup completes (the agent is already auto-selected by the platform).
 
-### 参数一：跟单比例
+### Parameter 1: Follow ratio
 
-Bot 询问跟单比例：输入百分比（如 50%），每笔按 Agent 仓位的对应比例跟随。当前代码不支持固定金额模式。
+The Bot asks for the follow ratio: enter a percentage (e.g. 50%); each trade follows the corresponding fraction of the agent's position. Fixed-amount mode is not supported in the current code.
 
-### 参数二：止损线
+### Parameter 2: Stop-loss
 
-Bot 询问是否设置止损线：
-- 输入负百分比（如 -20%），亏损超过该比例时自动停止跟单
-- 选择不设置，则持续跟随 Agent，不自动停止
+The Bot asks whether to set a stop-loss:
+- Enter a negative percentage (e.g. -20%); copy-trading stops automatically when the loss exceeds that.
+- Choose not to set it, and following continues without auto-stop.
 
-### 参数三：滑点
+### Parameter 3: Slippage
 
-杠杆不再作为用户配置项；下单时会跟随 Agent 当前仓位杠杆。用户可调整 IOC 滑点：
+Leverage is no longer a user parameter; orders follow the agent's current position leverage. The user can adjust the IOC slippage:
 
 ```bash
 .venv/bin/python cli.py config set slippage_percent 1.5
 ```
 
-### 参数四：币种白名单
+### Parameter 4: Coin whitelist
 
-默认跟单主流币：BTC, ETH, SOL, BNB, APT, ATOM, ARB, AVAX, ADA, BCH, DOGE, DOT, FIL, HBAR, LINK, LTC, NEAR, OP, SUI, TRX, XRP, UNI。`allowed_coins` 是币种白名单，服务启动不会自动覆盖；如需更保守，可只保留其中部分币种。
+Default majors: BTC, ETH, SOL, BNB, APT, ATOM, ARB, AVAX, ADA, BCH, DOGE, DOT, FIL, HBAR, LINK, LTC, NEAR, OP, SUI, TRX, XRP, UNI. `allowed_coins` is a coin whitelist; the service won't auto-overwrite it on start. For a more conservative setup, keep only some of these coins.
 
 ```bash
-# 主流币白名单
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json config set allowed_coins '["BTC","ETH","SOL","BNB","APT","ATOM","ARB","AVAX","ADA","BCH","DOGE","DOT","FIL","HBAR","LINK","LTC","NEAR","OP","SUI","TRX","XRP","UNI"]'
+# Majors whitelist
+.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json config set allowed_coins '["BTC","ETH","SOL","BNB","APT","ATOM","ARB","AVAX","ADA","BCH","DOGE","DOT","FIL","HBAR","LINK","LTC","NEAR","OP","SUI","TRX","XRP","UNI"]'
 ```
 
-### 确认摘要
+### Confirmation summary
 
-Bot 汇总配置信息供用户确认：
-- Agent 名称
-- 跟单比例
-- 止损线（或「未设置」）
-- 滑点
-- 币种白名单
+The Bot summarizes the config for the user to confirm:
+- Agent name
+- Follow ratio
+- Stop-loss (or "not set")
+- Slippage
+- Coin whitelist
 
-用户可选择「确认开启」或「修改参数」。
+The user can choose "Confirm & start" or "Edit parameters."
 
 ---
 
-## 阶段三：运行与管理
+## Stage 3: Run & manage
 
-### 激活成功
+### Activation success
 
 ```bash
 .venv/bin/python cli.py service start
 .venv/bin/python cli.py service status
 ```
 
-Bot 发送启动成功消息，告知用户 Agent 有新操作时会立即通知。启动成功消息保持简洁，包含关键运行参数和初始化结果即可。
+The Bot sends a start-success message and tells the user they'll be notified immediately when the agent acts. Keep the start-success message concise, with the key run parameters and the init result.
 
-推荐格式：
+Recommended format:
 
 ```
-已成功启动并初始化跟单 ✅
+Copy-trade started and initialized ✅
 
-• 网络: <根据 hl_api_url 判断：测试网/主网>
-• Agent: agt_xxx（若有名称则显示名称）
-• Agent 持仓: SHORT/LONG <size> BTC-USDC @ <price>（无持仓则写“暂无持仓，仅建立监听”）
-• 跟单比例: <percent>%（$我方净值 / $Agent 净值，若可获取）
-• 滑点: <slippage_percent>%
-• 币种白名单: BTC
-• 主钱包: 0xMAIN_ADDRESS
+• Network: <testnet/mainnet, inferred from hl_api_url>
+• Agent: agt_xxx (show name if available)
+• Agent position: SHORT/LONG <size> BTC-USDC @ <price> (if none: "no position, monitoring only")
+• Follow ratio: <percent>% ($your equity / $agent equity, if available)
+• Slippage: <slippage_percent>%
+• Coin whitelist: BTC
+• Main wallet: 0xMAIN_ADDRESS
 • Agent Wallet: 0xAGENT_ADDRESS
-• Follower ID: flw_xxx（若有）
-• 初始化: 已买入/卖出 <size> BTC（开多/开空/平仓/无需下单）
-• 状态: 运行中，有交易会自动同步
+• Follower ID: flw_xxx (if any)
+• Init: bought/sold <size> BTC (open long/open short/close/no order needed)
+• Status: running, trades will sync automatically
 ```
 
-### 跟单运行机制
+### How copy-trading runs
 
-服务启动后：
-1. **基线初始化** — 查询 Moss Agent 当前仓位，按比例在 HL 上开仓对齐
-   - 盈亏超过阈值（默认 3%）的仓位只记基线不追仓
-   - 本轮启动中只有首个通道执行 baseline check/init；已有基线但我方仓位为空时会 force-reinit，便于用户手动清仓后直接恢复
-2. **fills 轮询** — 默认每 15 秒查询 Moss `/fills` 接口；重启后最多回看最近 20 分钟，避免短暂停机漏单但不回放过久历史
-3. **检测到新 fill** → 查 Moss 仓位 → delta 对齐 → 在 HL 上 IOC 下单
-4. **Agent 平仓** → 基线自动归零 → 可跟新方向
+After the service starts:
+1. **Baseline init** — query the agent's current positions on Moss and align on HL by ratio
+   - positions with PnL beyond the threshold (default 3%) only record a baseline, no catch-up
+   - only the first channel in a given start does the baseline check/init; if a baseline exists but your position is empty, it force-reinits, so a user can resume directly after manually flattening
+2. **fills polling** — query the Moss `/fills` endpoint every 15s by default; on restart it looks back at most 20 minutes, to avoid missing fills during a brief downtime without replaying too much history
+3. **new fill detected** → query Moss positions → delta alignment → IOC order on HL
+4. **agent flattens** → baseline resets to zero → can follow a new direction
 
-### 主动推送通知
-每次 Agent 执行交易，Bot 推送通知，内容包含：
-- Agent 名称
-- 交易方向（买入 / 卖出）
-- 标的资产
-- 执行价格
-- 用户同步仓位情况
+### Proactive push notifications
+Each time the agent trades, the Bot pushes a notification containing:
+- Agent name
+- Trade direction (buy / sell)
+- Asset
+- Execution price
+- Your synced position state
 
-### 用户主动查询
+### User-initiated queries
 
-用户发送「状态」，Bot 返回当前状态摘要：
-- 运行状态（运行中 / 已暂停）
-- 当前跟单 Agent
-- 今日收益（金额 + 百分比）
-- 今日交易笔数
-- 当前跟单参数（比例、止损线）
-- 最近几笔交易记录（盈亏）
+When the user sends "Status," the Bot returns a summary:
+- Run state (running / paused)
+- Current followed agent
+- Today's PnL (amount + percent)
+- Today's trade count
+- Current parameters (ratio, stop-loss)
+- A few recent trades (PnL)
 
-对应 CLI：
+Matching CLI:
 ```bash
 .venv/bin/python cli.py service status
 .venv/bin/python cli.py stats
@@ -323,194 +352,194 @@ Bot 发送启动成功消息，告知用户 Agent 有新操作时会立即通知
 .venv/bin/python cli.py balance
 ```
 
-### 管理指令
+### Management commands
 
-用户可随时发送以下关键词触发对应操作：
+The user can send any of these keywords at any time:
 
-| 指令 | 行为 | CLI 对应 |
-|------|------|----------|
-| 暂停跟单 | 平掉所有持仓并停止跟单 | `service pause` |
-| 恢复跟单 | 从暂停状态重新开始跟单 | `service resume` |
-| 同步最新 Agent | 平仓 + 清基线 + 重新解析官方 Agent 指针 + 重启 | `service switch` |
-| 调整参数 | 重新配置跟单比例、止损、止盈、滑点、币种白名单 | `config set ...` |
-| 停止 | 进入二次确认流程 | `service stop` + 吊销 Agent |
-| 状态 | 返回当前跟单状态摘要 | `service status` + `stats` |
+| Command | Behavior | CLI |
+|---------|----------|-----|
+| Pause | flatten all positions and stop copy-trading | `service pause` |
+| Resume | restart copy-trading from paused | `service resume` |
+| Sync latest agent | flatten + clear baseline + re-resolve official agent pointer + restart | `service switch` |
+| Adjust parameters | reconfigure follow ratio, stop-loss, take-profit, slippage, coin whitelist | `config set ...` |
+| Stop | enter a two-step confirmation flow | `service stop` + revoke agent |
+| Status | return the current copy-trade status summary | `service status` + `stats` |
 
 ---
 
-### 暂停跟单流程
+### Pause flow
 
-**触发场景**：用户想停止跟单并平掉所有持仓。
+**Scenario**: the user wants to stop copy-trading and flatten all positions.
 
 ```
-用户：暂停跟单
+User: Pause
 
-Bot：确认要暂停跟单吗？暂停后将：
-     - 所有订单全部平仓
-     - 停止继续跟单
-     请确认：[确认暂停] [取消]
+Bot: Confirm pause? On pause:
+     - all positions will be closed
+     - copy-trading will stop
+     Please confirm: [Confirm pause] [Cancel]
 
-用户：确认暂停
+User: Confirm pause
 
-Bot：（执行 service pause）
-     ✅ 已暂停跟单
-     - 所有持仓已平仓完成
-     - 跟单已停止
-     如需恢复，请发送「恢复跟单」
+Bot: (runs service pause)
+     ✅ Copy-trading paused
+     - all positions closed
+     - copy-trading stopped
+     To resume, send "Resume"
 ```
 
-对应 CLI：
+Matching CLI:
 ```bash
 .venv/bin/python cli.py service pause
 ```
 
-`service pause` 会执行：全平仓 → 停止服务 → 清除基线。
+`service pause` does: flatten all → stop service → clear baseline.
 
-**异常处理**：
-- 用户回复「取消」→ Bot 回复「已取消，跟单继续运行」，不做任何操作
-- 平仓失败时 → Bot 告知用户具体错误，提示手动处理
-
----
-
-### 恢复跟单流程
-
-**触发场景**：用户从暂停状态重新开始跟单。
-
-```
-用户：恢复跟单
-
-Bot：（执行 service status 检查当前状态）
-     检测到您当前处于暂停状态
-     确认要恢复跟单吗？恢复后将从头开始跟单
-     请确认：[确认恢复] [取消]
-
-用户：确认恢复
-
-Bot：（执行 service resume）
-     ✅ 跟单已恢复
-     - 当前跟单 Agent：XXX（从 config 中读取 agent_id）
-     - 已从头开始跟单
-```
-
-对应 CLI：
-```bash
-.venv/bin/python cli.py service status     # 先检查状态
-.venv/bin/python cli.py service resume     # 恢复服务
-```
-
-`service resume` 会执行：启动服务 → 重新 bootstrap 初始化基线。
-
-**异常处理**：
-- 若当前未处于暂停状态（服务正在运行）→ Bot 提示「跟单当前已在运行中，无需恢复」
-- 用户回复「取消」→ 不做任何操作
+**Error handling**:
+- User replies "Cancel" → Bot replies "Cancelled, copy-trading continues," no action
+- If flattening fails → Bot tells the user the specific error and to handle manually
 
 ---
 
-### 同步最新 Agent 流程
+### Resume flow
 
-**触发场景**：用户想确保自己跟的是当前最新的官方 Agent（官方可能已更新 Agent）。
+**Scenario**: the user resumes copy-trading from paused.
 
 ```
-用户：同步最新 Agent
+User: Resume
 
-Bot：（执行 service status 确认当前状态）
-     同步将：
-     - 平掉当前所有持仓
-     - 重新拉取当前官方 Agent 并重建基线
-     确认同步吗？[确认] [取消]
+Bot: (runs service status to check state)
+     You're currently paused.
+     Confirm resume? On resume, copy-trading restarts from scratch.
+     Please confirm: [Confirm resume] [Cancel]
 
-用户：确认
+User: Confirm resume
 
-Bot：（执行 service switch = pause + resume）
-     ✅ 已同步到最新官方 Agent
-     - 旧持仓已平仓
-     - 已按当前官方 Agent 重建基线，跟单继续运行
+Bot: (runs service resume)
+     ✅ Copy-trading resumed
+     - Current followed agent: XXX (read agent_id from config)
+     - restarted from scratch
 ```
 
-对应 CLI：
+Matching CLI:
 ```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json service switch
+.venv/bin/python cli.py service status     # check state first
+.venv/bin/python cli.py service resume     # resume service
 ```
 
-`service switch` 会执行：暂停（全平仓 + 清基线）→ 重启服务（启动时自动重新解析 `agent_pointer_url`，重建基线）。用户不需要、也不能指定具体 Agent。
+`service resume` does: start service → re-bootstrap baseline init.
 
-**异常处理**：
-- 用户回复「取消」→ 不做任何操作，保持当前跟单。
-- 远端指针不可达 → 重启时沿用上次已知 Agent，并提示用户稍后再试。
+**Error handling**:
+- If not currently paused (service running) → Bot replies "Copy-trading is already running, no need to resume"
+- User replies "Cancel" → no action
 
-### 调整参数流程
+---
 
-**触发场景**：用户想修改跟单比例、止损、止盈、滑点或币种白名单。
+### Sync latest agent flow
 
-```
-用户：调整参数
-
-Bot：请选择要调整的参数：
-     [跟单比例] [止损] [止盈] [滑点] [币种白名单]
-```
-
-**— 调整跟单比例 —**
+**Scenario**: the user wants to make sure they're on the current latest official agent (the platform may have updated it).
 
 ```
-用户：跟单比例
+User: Sync latest agent
 
-Bot：（执行 config show 读取当前 follow_ratio）
-     当前跟单比例：50%
-     ⚠️ 注意：不建议设置 100% 以上，超额跟单会放大风险。
-     请输入新的比例：
+Bot: (runs service status to confirm state)
+     Syncing will:
+     - close all current positions
+     - re-pull the current official agent and rebuild the baseline
+     Confirm sync? [Confirm] [Cancel]
 
-用户：30%
+User: Confirm
 
-Bot：（执行 config set follow_ratio 0.3）
-     ✅ 跟单比例已调整为 30%
+Bot: (runs service switch = pause + resume)
+     ✅ Synced to the latest official agent
+     - old positions closed
+     - baseline rebuilt on the current official agent, copy-trading continues
 ```
 
-**— 调整止损 —**
-
-```
-用户：止损
-
-Bot：（执行 config show 读取当前 stop_loss_pct）
-     当前止损设置：-10%（0 表示未设置）
-     请输入新的止损比例（如 -8%，输入 0 关闭止损）：
-
-用户：-8%
-
-Bot：（执行 config set stop_loss_pct 8）
-     ✅ 止损已调整为 -8%
+Matching CLI:
+```bash
+.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json service switch
 ```
 
-**— 调整止盈 —**
+`service switch` does: pause (flatten all + clear baseline) → restart service (re-resolves `agent_pointer_url` on start and rebuilds the baseline). The user does not need to — and cannot — specify a particular agent.
+
+**Error handling**:
+- User replies "Cancel" → no action, current copy-trading is kept.
+- Remote pointer unreachable → restart reuses the last-known agent and the Bot tells the user to try again later.
+
+### Adjust parameters flow
+
+**Scenario**: the user wants to change follow ratio, stop-loss, take-profit, slippage, or coin whitelist.
 
 ```
-用户：止盈
+User: Adjust parameters
 
-Bot：（执行 config show 读取当前 take_profit_pct）
-     当前止盈设置：20%（0 表示未设置）
-     请输入新的止盈比例（如 25%，输入 0 关闭止盈）：
-
-用户：25%
-
-Bot：（执行 config set take_profit_pct 25）
-     ✅ 止盈已调整为 25%
+Bot: Which parameter would you like to adjust?
+     [Follow ratio] [Stop-loss] [Take-profit] [Slippage] [Coin whitelist]
 ```
 
-**— 调整滑点 —**
+**— Adjust follow ratio —**
 
 ```
-用户：滑点
+User: Follow ratio
 
-Bot：（执行 config show 读取当前 slippage_percent）
-     当前滑点：1.5%
-     请输入新的 IOC 滑点百分比：
+Bot: (runs config show to read current follow_ratio)
+     Current follow ratio: 50%
+     ⚠️ Note: above 100% is not recommended; over-following amplifies risk.
+     Enter the new ratio:
 
-用户：2
+User: 30%
 
-Bot：（执行 config set slippage_percent 2）
-     ✅ 滑点已调整为 2%
+Bot: (runs config set follow_ratio 0.3)
+     ✅ Follow ratio set to 30%
 ```
 
-对应 CLI：
+**— Adjust stop-loss —**
+
+```
+User: Stop-loss
+
+Bot: (runs config show to read current stop_loss_pct)
+     Current stop-loss: -10% (0 means not set)
+     Enter the new stop-loss (e.g. -8%, enter 0 to disable):
+
+User: -8%
+
+Bot: (runs config set stop_loss_pct 8)
+     ✅ Stop-loss set to -8%
+```
+
+**— Adjust take-profit —**
+
+```
+User: Take-profit
+
+Bot: (runs config show to read current take_profit_pct)
+     Current take-profit: 20% (0 means not set)
+     Enter the new take-profit (e.g. 25%, enter 0 to disable):
+
+User: 25%
+
+Bot: (runs config set take_profit_pct 25)
+     ✅ Take-profit set to 25%
+```
+
+**— Adjust slippage —**
+
+```
+User: Slippage
+
+Bot: (runs config show to read current slippage_percent)
+     Current slippage: 1.5%
+     Enter the new IOC slippage percent:
+
+User: 2
+
+Bot: (runs config set slippage_percent 2)
+     ✅ Slippage set to 2%
+```
+
+Matching CLI:
 ```bash
 .venv/bin/python cli.py config show
 .venv/bin/python cli.py config set follow_ratio 0.3
@@ -519,456 +548,455 @@ Bot：（执行 config set slippage_percent 2）
 .venv/bin/python cli.py config set slippage_percent 2
 ```
 
-**注意**：参数修改后无需重启服务，下次 delta 对齐时自动生效。但跟单比例变化会影响后续所有仓位计算，需告知用户。
+**Note**: parameter changes don't require a restart; they take effect on the next delta alignment. But a change in follow ratio affects all subsequent position math — tell the user.
 
 ---
 
-### 停止流程（需二次确认）
+### Stop flow (two-step confirmation)
 
-Bot 发送确认提示，说明：
-- 现有持仓不会自动平仓
-- Agent Wallet 将被注销，不可恢复
-- 如需重新跟单需重新完成钱包设置
+The Bot sends a confirmation prompt explaining:
+- existing positions are NOT auto-closed
+- the Agent Wallet will be revoked, irreversibly
+- to copy-trade again, wallet setup must be redone
 
-用户回复「确认停止」后执行；回复「取消」则维持当前状态。
+Execute after the user replies "Confirm stop"; "Cancel" keeps the current state.
 
-停止完成后，Bot 告知用户 Agent Wallet 已吊销，并提示可发送「开始」重新设置。
+After stopping, the Bot tells the user the Agent Wallet has been revoked and they can send "Start" to set up again.
 
-对应 CLI：
+Matching CLI:
 ```bash
 .venv/bin/python cli.py service stop
 ```
 
 ---
 
-## 完整流程状态机
+## Full state machine
 
 ```
-[安装 Skill]
+[Install skill]
      ↓
-[Bot 欢迎消息] → 用户点击「去完成钱包设置」
+[Bot welcome] → user clicks "Complete wallet setup"
      ↓
-[钱包设置页面]
-  Step 1: 连接主钱包
-  Step 2: 生成 Agent Wallet
-  Step 3: 主钱包签名
-     ↓ 完成，自动发消息返回对话
-[Bot 验证成功] → 进入配置跟单参数（Agent 已自动选定）
+[Wallet-setup page]
+  Step 1: Connect main wallet
+  Step 2: Generate Agent Wallet
+  Step 3: Main wallet signature
+     ↓ done, auto-message back to chat
+[Bot verified] → go to configure parameters (agent already auto-selected)
      ↓
-[Agent 由官方指针自动选定，无用户交互]
+[Agent auto-selected by official pointer, no user interaction]
      ↓
-[配置跟单参数]
-  - 跟单比例
-  - 止损线
-  - 杠杆 / 滑点 / 币种白名单
-  - 确认摘要
-     ↓ 确认开启
-[跟单中]
-  ├── Moss fills 轮询 (每5秒)
-  ├── 新 fill → delta 对齐 → HL 下单
-  ├── 主动推送交易通知
-  ├── 用户查询「状态」
-  ├── 用户「调整参数」→ 选参数 → 输入新值 → [跟单中]（参数更新，继续运行）
-  ├── 用户「暂停跟单」→ 二次确认 → 全平仓 → [已暂停]
-  │                                               ├── 「恢复跟单」→ 二次确认 → 重建基线 → [跟单中]
-  │                                               └── 「同步最新 Agent」→ 平仓 → 重新解析官方 Agent → [跟单中]
-  └── 用户「停止」→ 二次确认 → 吊销 Agent Wallet
+[Configure parameters]
+  - Follow ratio
+  - Stop-loss
+  - Leverage / slippage / coin whitelist
+  - Confirmation summary
+     ↓ confirm & start
+[Copy-trading]
+  ├── Moss fills polling (every 15s)
+  ├── new fill → delta alignment → HL order
+  ├── proactive trade notifications
+  ├── user queries "Status"
+  ├── user "Adjust parameters" → pick param → enter value → [Copy-trading] (updated, keeps running)
+  ├── user "Pause" → confirm → flatten all → [Paused]
+  │                                            ├── "Resume" → confirm → rebuild baseline → [Copy-trading]
+  │                                            └── "Sync latest agent" → flatten → re-resolve official agent → [Copy-trading]
+  └── user "Stop" → confirm → revoke Agent Wallet
                               ↓
-                         [可重新开始]
+                         [Can start over]
 ```
 
 ---
 
-## 关键词触发列表
+## Keyword trigger list
 
-| 关键词 | 阶段 | 触发行为 |
-|--------|------|----------|
-| 开始 / 设置钱包 | 任意 | 引导进入钱包设置 |
-| 继续 | 钱包设置后 | 进入下一步 |
-| 状态 | 运行中 / 暂停中 | 返回跟单状态摘要 |
-| 暂停跟单 | 运行中 | 二次确认 → 全平仓 + 停止服务 |
-| 恢复跟单 | 暂停中 | 二次确认 → 重建基线 + 恢复服务 |
-| 同步最新 Agent | 运行中 / 暂停中 | 平仓 + 清基线 + 重新解析官方 Agent 指针 + 重启 |
-| 调整参数 | 运行中 / 暂停中 | 展示参数选项 → 引导修改具体参数 |
-| 确认暂停 | 暂停确认中 | 执行 service pause |
-| 确认恢复 | 恢复确认中 | 执行 service resume |
-| 停止 | 运行中 / 暂停中 | 触发停止确认流程 |
-| 确认停止 | 停止确认中 | 执行停止并吊销 Agent Wallet |
-| 取消 | 任意确认中 | 取消当前操作，维持现状 |
-
----
-
-## 配置参数参考
-
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `private_key` | — | Agent Wallet 私钥（wallet-generate 生成） |
-| `wallet_address` | — | Agent Wallet 地址 |
-| `main_address` | — | 主钱包地址（持有资金，授权 Agent） |
-| `hl_api_url` | `https://api.hyperliquid-testnet.xyz` | Hyperliquid API 地址（测试网） |
-| `hl_authorize_url` | `https://alpha.moss.site/hyperliquid/authorize` | Hyperliquid 授权页面基础 URL（测试网） |
-| `moss_agent_list_url` | `https://alpha.moss.site/agent?mode=realtime` | Moss Agent 列表页面（测试网）；主网为 `https://moss.site/agent?mode=realtime` |
-| `slippage_percent` | `1.5` | IOC 滑点 % |
-| `alignment_loss_pct` | `3.0` | 基线初始化盈亏阈值 %（超过则不追仓） |
-| `allowed_coins` | `["BTC","ETH","SOL","BNB","APT","ATOM","ARB","AVAX","ADA","BCH","DOGE","DOT","FIL","HBAR","LINK","LTC","NEAR","OP","SUI","TRX","XRP","UNI"]` | 币种白名单（空=不限制） |
-| `perp_only` | `true` | 仅做合约 |
-| `moss_source.enabled` | `true` | 启用 Moss 信号源 |
-| `moss_source.base_url` | `http://54.255.3.5:8088` | Moss API 地址 |
-| `moss_source.agent_id` | — | Moss Agent ID（agt_xxx 格式） |
-| `moss_source.fill_poll_secs` | `15` | fills 轮询间隔（秒） |
-| `moss_source.symbol_map` | — | 币种映射（主流币的 USDT/USDC symbol → HL coin） |
-
-### 网络配置
-
-当前 `dev` 分支默认使用 **Hyperliquid 测试网**；主网/测试网完整参数见 `docs/network-config.md`：
-- Hyperliquid API：`https://api.hyperliquid-testnet.xyz`
-- 授权页面：`https://alpha.moss.site/hyperliquid/authorize/<wallet_address>`
-- Moss API：`http://54.255.3.5:8088`
-- Moss 平台前端：主网 `https://moss.site/agent?mode=realtime`；测试网 `https://alpha.moss.site/agent?mode=realtime`
-
-主网发布使用 `main` 分支和 `config_default.mainnet.json`。
+| Keyword | Stage | Action |
+|---------|-------|--------|
+| Start / Set up wallet | any | guide into wallet setup |
+| Continue | after wallet setup | proceed to next step |
+| Status | running / paused | return copy-trade status summary |
+| Pause | running | confirm → flatten all + stop service |
+| Resume | paused | confirm → rebuild baseline + resume service |
+| Sync latest agent | running / paused | flatten + clear baseline + re-resolve official agent pointer + restart |
+| Adjust parameters | running / paused | show parameter options → guide the specific change |
+| Confirm pause | pause-confirm | run service pause |
+| Confirm resume | resume-confirm | run service resume |
+| Stop | running / paused | trigger stop-confirmation flow |
+| Confirm stop | stop-confirm | execute stop and revoke Agent Wallet |
+| Cancel | any confirmation | cancel the current action, keep state |
 
 ---
 
-## 注意事项
+## Config parameter reference
 
-- 钱包设置在独立页面完成，不在对话内逐步引导，避免流程过长
-- Agent 由官方集中选择并通过远端指针下发，Bot 绝不让用户挑选或粘贴 Agent
-- 停止跟单必须经过二次确认，防止误操作
-- Bot 不主动平仓，停止跟单仅停止复制新交易，现有持仓由用户自行处理
-- 每次推送通知需简洁，仅包含核心交易信息，不过度打扰用户
-- 所有回复必须使用中文
-- 永远不要显示完整的 private_key，必须脱敏显示
+| Field | Default | Description |
+|-------|---------|-------------|
+| `private_key` | — | Agent Wallet private key (from wallet-generate) |
+| `wallet_address` | — | Agent Wallet address |
+| `main_address` | — | main wallet address (holds funds, authorizes the agent) |
+| `hl_api_url` | `https://api.hyperliquid-testnet.xyz` | Hyperliquid API URL (testnet) |
+| `hl_authorize_url` | `https://alpha.moss.site/hyperliquid/authorize` | Hyperliquid authorization base URL (testnet) |
+| `agent_pointer_url` | — | HTTPS URL serving the curated agent JSON (`{"agent_id": "agt_..."}`); resolved at service start |
+| `slippage_percent` | `1.5` | IOC slippage % |
+| `alignment_loss_pct` | `3.0` | baseline-init PnL threshold % (beyond → no catch-up) |
+| `allowed_coins` | `["BTC","ETH","SOL","BNB","APT","ATOM","ARB","AVAX","ADA","BCH","DOGE","DOT","FIL","HBAR","LINK","LTC","NEAR","OP","SUI","TRX","XRP","UNI"]` | coin whitelist (empty = no restriction) |
+| `perp_only` | `true` | perps only |
+| `moss_source.enabled` | `true` | enable the Moss signal source |
+| `moss_source.base_url` | `http://54.255.3.5:8088` | Moss API URL |
+| `moss_source.agent_id` | — | Moss agent ID (agt_xxx); set automatically from `agent_pointer_url` |
+| `moss_source.fill_poll_secs` | `15` | fills poll interval (seconds) |
+| `moss_source.symbol_map` | — | symbol mapping (majors' USDT/USDC symbol → HL coin) |
 
----
+### Network config
 
-## 常见问题知识库（FAQ）
+The `dev` branch currently defaults to **Hyperliquid testnet**; full mainnet/testnet parameters are in `docs/network-config.md`:
+- Hyperliquid API: `https://api.hyperliquid-testnet.xyz`
+- Authorization page: `https://alpha.moss.site/hyperliquid/authorize/<wallet_address>`
+- Moss API: `http://54.255.3.5:8088`
 
-> 当用户提问匹配以下类别时，Bot 应综合回答，语气友好、简洁、专业。
-> 回答时优先使用本节要点，结合用户当前所处阶段给出上下文相关的回复。
-
----
-
-### 一、机制理解
-
-**Q: Agent Wallet 是什么？**
-Agent Wallet 是 Hyperliquid 官方支持的代理钱包机制。Bot 持有 Agent Wallet 的私钥，代替用户在 Hyperliquid 上提交交易。主钱包不会被直接操作，资产始终在用户自己的账户中。用户可以随时在 Hyperliquid 上吊销 Agent Wallet 的授权。
-
-**Q: 签名做什么用？**
-主钱包签名的作用是在 Hyperliquid 链上登记一条授权记录，将 Agent Wallet 绑定为主钱包的代理人。这个过程不会转移任何资产，只是一条链上授权声明。签名后 Agent Wallet 才能代替主钱包下单。
-
-**Q: 跟单是怎么运作的？**
-Bot 通过 Moss 平台的 WebSocket 和 REST API 实时监听你选择的 Agent 的交易行为。WS 只把 `order.filled` 作为跟单触发源，REST poller 轮询 fills 作为兜底；两条通道都会记录原始事件，并用同一个订单级 `process_key`（`moss_order_<order_id>`）判断是否已处理，避免重复下单。确认需要同步时，Bot 计算仓位差值（delta），按照你设定的比例，用 Agent Wallet 在 Hyperliquid 上同步执行相同方向的交易。整个过程全自动，无需人工干预。
-
-**Q: Moss 平台是什么？**
-Moss 是一个交易策略平台，平台上的 Agent 是自动执行交易策略的机器人。用户可以在 Moss 上浏览各个 Agent 的历史表现（收益率、回撤、胜率等），选择自己看好的 Agent 进行跟单。Bot 的信号源来自 Moss 平台。
-
-**Q: Hyperliquid 是什么？**
-Hyperliquid 是一个去中心化的永续合约交易所，所有跟单交易都在 Hyperliquid 上执行。用户的资金存放在 Hyperliquid 账户中，Bot 通过 Agent Wallet 机制代为下单，不需要将资金转到其他地方。
+Mainnet release uses the `main` branch and `config_default.mainnet.json`.
 
 ---
 
-### 二、安全与风险
+## Notes
 
-**Q: 私钥安全吗？会不会泄露？**
-Agent Wallet 的私钥加密存储在本地配置文件中，仅用于向 Hyperliquid 提交交易，不会发送到任何其他地方。私钥不会在对话中完整展示（始终脱敏显示）。建议用户妥善保管配置文件，不要分享给他人。
-
-**Q: 主钱包会被动用吗？资产有风险吗？**
-主钱包只参与一次签名操作（登记授权关系），之后所有交易都由 Agent Wallet 执行。主钱包的私钥不会被 Bot 存储或使用。资金始终在用户自己的 Hyperliquid 账户中，Agent Wallet 只是一个「下单代理」，不能提取资金。
-
-**Q: 余额不足了，应该充值到哪里？**
-请充值到**主钱包对应的 Hyperliquid 账户**，不要理解成直接链上转账到主钱包地址本身。跟单实际使用的是主钱包在 Hyperliquid 里的资金余额；如果 Bot 提示余额不足，需要补的是这个 HL 账户里的可用资金。回复时应明确区分“主钱包地址”和“主钱包对应的 HL 账户”，避免用户充错地方。
-
-**Q: 跟单亏损怎么办？谁负责？**
-Bot 只是忠实地复制 Agent 的交易行为，不对交易结果负责，也不保证收益。Agent 策略本身可能出现亏损。建议用户：
-- 设置止损线（如 -20%），超过亏损阈值自动停止跟单
-- 合理分配跟单资金，不要用全部资产跟单
-- 定期查看跟单状态和收益情况
-
-**Q: 如何停止跟单 / 吊销授权？**
-随时可以停止：
-- 发送「暂停跟单」→ 全平仓 + 停止服务（可恢复）
-- 发送「停止」→ 二次确认后停止服务并吊销 Agent Wallet（不可恢复，需重新设置）
-- 也可以直接在 Hyperliquid 官网上手动吊销 Agent Wallet 授权
-
-**Q: 最坏情况下最大损失是多少？**
-最大损失取决于三个因素：
-1. **跟单资金量** — 你分配了多少资金用于跟单
-2. **Agent 表现** — Agent 策略的最大回撤
-3. **止损设置** — 是否设置了止损线
-如果未设止损且 Agent 策略出现极端亏损，理论上可能损失全部跟单资金。强烈建议设置止损线并控制跟单比例。
+- Wallet setup happens on a separate page, not stepped through inline, to avoid an overly long flow
+- The agent is centrally selected and delivered via the remote pointer; the Bot must never let the user pick or paste an agent
+- Stopping copy-trade requires two-step confirmation to prevent mistakes
+- The Bot does not auto-flatten; stopping only halts copying new trades — existing positions are the user's to handle
+- Keep each push notification concise, only core trade info, don't over-notify
+- **All replies must be in English**
+- Never show the full private_key — always mask it
 
 ---
 
-### 三、操作流程
+## FAQ knowledge base
 
-**Q: 钱包连接失败怎么办？**
-请依次检查：
-1. 钱包插件（MetaMask / Phantom）是否已安装并解锁
-2. 浏览器是否允许弹窗权限
-3. 尝试刷新页面后重新连接
-4. 如仍无法连接，尝试切换其他钱包（如 WalletConnect）
-
-**Q: 签名弹窗没有出现？**
-请检查：
-1. 钱包是否处于锁定状态（需要先解锁）
-2. 浏览器是否屏蔽了弹窗（检查地址栏弹窗拦截提示）
-3. 手动打开钱包扩展程序，看是否有待确认的签名请求
-4. 刷新页面后重新点击签名按钮
-
-**Q: 参数怎么填？各参数是什么意思？**
-| 参数 | 含义 | 建议值 |
-|------|------|--------|
-| 跟单比例 | Agent 仓位的跟随比例，50% 表示跟一半 | 保守 30-50%，激进 80-100% |
-| 止损线 | 亏损达到该比例时自动停止跟单 | 建议 -20% 至 -30% |
-| 止盈线 | 盈利达到该比例时自动停止跟单 | 可不设，或设 50%+ |
-| 滑点 | 下单时允许的最大价格偏差 | 默认 1.5% 即可 |
-
-**Q: 流程中途能退出吗？**
-可以随时退出。未完成的设置不会生效，下次重新进入时从头开始设置即可。已有的配置和钱包信息会保留，无需重复生成 Agent Wallet。
+> When a user question matches a category below, the Bot should answer holistically, friendly, concise, and professional.
+> Prioritize the points in this section and tailor the reply to the user's current stage.
 
 ---
 
-### 四、跟单策略
+### 1. Mechanism understanding
 
-**Q: 我能选 Agent 吗？跟的是哪个？**
-不能自选。跟单 Agent 由 SuperClaw 官方集中挑选并下发，服务启动时自动生效。这样做是为了让所有用户跟随当前经过筛选的策略。**注意：官方为你选定 Agent，并不构成投资建议，也不保证收益；所有交易盈亏与风险仍由你自行承担。** 如果官方更新了 Agent，你可以发送「同步最新 Agent」切换到最新的官方 Agent。
+**Q: What is an Agent Wallet?**
+The Agent Wallet is Hyperliquid's officially-supported delegated-wallet mechanism. The Bot holds the Agent Wallet's private key and submits trades on Hyperliquid on the user's behalf. The main wallet is never operated directly, and assets always stay in the user's own account. The user can revoke the Agent Wallet's authorization on Hyperliquid at any time.
 
-**Q: 跟单比例设多少合适？**
-取决于你的风险承受能力：
-- **保守型**：30-50%，降低波动，适合新手
-- **均衡型**：50-80%，跟随大部分仓位
-- **激进型**：80-100%，几乎完全复制 Agent 仓位
-不建议设 100% 以上（超额跟单），可能放大风险。
+**Q: What is the signature for?**
+The main wallet signature registers an authorization record on Hyperliquid binding the Agent Wallet as the main wallet's delegate. It transfers no assets — just an on-chain authorization statement. Only after signing can the Agent Wallet place orders for the main wallet.
 
-**Q: 止损线要不要设？**
-**强烈建议设置**。止损线可以防止极端行情下损失过大。推荐范围 -20% 至 -30%。即使你看好 Agent 策略，也建议设置一个较宽的止损作为安全网。设为 0 表示关闭止损。
+**Q: How does copy-trading work?**
+The Bot watches your followed agent's trading in real time via Moss's WebSocket and REST API. WS uses `order.filled` as the copy trigger; the REST poller polls fills as a backstop. Both channels record raw events and use the same order-level `process_key` (`moss_order_<order_id>`) to dedupe, avoiding duplicate orders. When a sync is needed, the Bot computes the position delta and, scaled by your ratio, mirrors the same-direction trade on Hyperliquid via the Agent Wallet. The whole process is fully automatic.
 
-**Q: 能同时跟多个 Agent 吗？**
-每个实例只跟随当前官方选定的那一个 Agent，用户不能自选，也不能同时跟多个。
+**Q: What is Moss?**
+Moss is a trading-strategy platform; its agents are bots that auto-execute strategies. The Bot's signal source is the Moss platform. (Note: on SuperClaw the followed agent is chosen centrally by the platform; the user does not browse or select agents.)
 
-**Q: Agent 数据怎么看？各指标什么意思？**
-| 指标 | 含义 |
-|------|------|
-| 收益率（ROI） | Agent 创建以来的累计盈利百分比 |
-| 累计盈亏（PnL） | 绝对盈亏金额（USDC） |
-| 最大回撤 | 历史上从最高点到最低点的最大亏损幅度 |
-| 胜率 | 盈利交易笔数 / 总交易笔数 |
-| 运行时间 | Agent 创建至今的持续时间 |
+**Q: What is Hyperliquid?**
+Hyperliquid is a decentralized perpetuals exchange where all copy-trades execute. Funds stay in the user's Hyperliquid account; the Bot places orders via the Agent Wallet mechanism, with no need to move funds elsewhere.
 
 ---
 
-### 五、运行状态
+### 2. Security & risk
 
-**Q: 跟单有没有在运行？**
-发送「状态」即可查看。Bot 会返回：运行状态、当前跟单 Agent、今日交易笔数、收益情况等。
+**Q: Is the private key safe? Could it leak?**
+The Agent Wallet private key is stored encrypted in the local config file, used only to submit trades to Hyperliquid, and never sent anywhere else. It is never shown in full in chat (always masked). Keep your config file private and don't share it.
 
-**Q: 为什么没有交易通知？**
-可能的原因：
-1. Agent 暂时没有新的交易操作（最常见）
-2. 服务运行正常但 Agent 处于观望状态
-3. 发送「状态」确认服务是否正常运行
-如果服务已停止，需要重新启动。
+**Q: Will my main wallet be touched? Is my money at risk?**
+The main wallet participates only in a one-time signature (registering the authorization). After that, all trades are executed by the Agent Wallet. The main wallet's private key is never stored or used by the Bot. Funds always stay in your own Hyperliquid account; the Agent Wallet is just an "order delegate" and cannot withdraw funds.
 
-**Q: 今天赚了多少？**
-发送「状态」或「收益」，Bot 会返回今日收益金额和百分比，以及最近几笔交易的明细。
+**Q: Low balance — where do I top up?**
+Top up the **Hyperliquid account that corresponds to your main wallet** — don't read this as an on-chain transfer to the main wallet address itself. Copy-trading uses the main wallet's balance inside Hyperliquid; if the Bot warns of low balance, that HL account's available funds are what needs topping up. Always distinguish "main wallet address" from "the HL account that corresponds to the main wallet" so the user doesn't send funds to the wrong place.
 
-**Q: 当前持仓是什么？**
-发送「状态」，Bot 会返回当前 Agent 的持仓币种和你的同步持仓情况（从 Moss 平台实时同步）。
+**Q: What if copy-trading loses money? Who's responsible?**
+The Bot faithfully mirrors the agent's trades; it is not responsible for outcomes and guarantees no profit. The agent's strategy itself can lose. Recommendations:
+- Set a stop-loss (e.g. -20%) to auto-stop beyond a loss threshold
+- Allocate copy-trade funds sensibly — don't follow with your entire balance
+- Check your status and PnL regularly
 
-**Q: 怎么暂停 / 恢复？**
-- 发送「暂停跟单」→ 二次确认后暂停，所有持仓将平仓
-- 发送「恢复跟单」→ 二次确认后恢复，从当前状态重新开始跟单
-暂停期间持仓已平，恢复后会重新初始化基线。
+**Q: How do I stop copy-trading / revoke authorization?**
+You can stop any time:
+- Send "Pause" → flatten all + stop service (resumable)
+- Send "Stop" → after confirmation, stop service and revoke the Agent Wallet (irreversible, requires re-setup)
+- You can also revoke the Agent Wallet authorization manually on the Hyperliquid site
 
-**Q: 运行中能改参数吗？**
-可以。发送「调整参数」，选择要修改的参数（跟单比例 / 止损 / 止盈 / 滑点 / 币种白名单）。修改后立即生效，无需重启服务。
-
----
-
-### 六、异常与错误
-
-**Q: 止损触发了，怎么回事？**
-说明你的跟单亏损已达到预设的止损线，跟单已自动停止。此时：
-- 现有持仓需要用户自行在 Hyperliquid 上处理（Bot 不会自动平仓）
-- 可以在 Hyperliquid 上手动平仓或继续持有
-- 如需重新跟单，发送「恢复跟单」
-
-**Q: 跟单执行失败了？**
-可能原因：
-- **余额不足** — 账户可用余额不够开仓，需充值到主钱包对应的 Hyperliquid 账户，不是直接转到主钱包地址本身
-- **滑点过大** — 市场波动剧烈，实际价格超出滑点限制，可适当调大滑点
-- **网络问题** — 与 Hyperliquid 或 Moss 的连接中断，Bot 会自动重连；Moss follower 注册失败会报错退出，需要用户修复后重启
-- **下单金额太小** — 低于 Hyperliquid 最小下单量
-查看日志（`tail -f ~/.hyperliquid-copy-trade/<6位>/logs/service.log`）可获取详细错误信息。
-
-**Q: Agent 停止运营了怎么办？**
-如果你跟单的 Agent 在 Moss 平台上下架或停止运营：
-- Bot 将无法获取新的交易信号
-- 现有持仓不受影响，需用户自行处理
-- 官方会更新 Agent 指针；你可发送「同步最新 Agent」切换到当前官方 Agent
-
-**Q: Bot 没反应 / 重复发消息没反应？**
-请尝试：
-1. 发送「状态」确认当前 Bot 所处阶段
-2. 使用正确的关键词（如「暂停跟单」「恢复跟单」「调整参数」等）
-3. 如果 Bot 持续无响应，可能服务已异常退出，尝试重新启动
+**Q: What's the worst-case maximum loss?**
+It depends on three factors:
+1. **Copy-trade capital** — how much you allocated to follow
+2. **Agent performance** — the strategy's max drawdown
+3. **Stop-loss** — whether you set one
+With no stop-loss and an extreme agent loss, you could in theory lose all your copy-trade capital. Strongly set a stop-loss and control your follow ratio.
 
 ---
 
-### 七、超出范围
+### 3. Operations
 
-**Q: 哪个币会涨？该不该买？（投资建议类）**
-Bot 不提供任何投资建议。跟单 Agent 由官方统一选定，用户无法自选；是否参与跟单、投入多少由用户自行决定并自担风险。
+**Q: Wallet connection failed?**
+Check in order:
+1. wallet extension (MetaMask / Phantom) installed and unlocked
+2. browser allows popups
+3. refresh and reconnect
+4. if it still won't connect, try another wallet (e.g. WalletConnect)
 
-**Q: 帮我平掉某个仓位（手动交易类）**
-Bot 只负责跟单（复制 Agent 交易），不支持单独平仓或自定义交易操作。如需手动平仓，请前往 Hyperliquid 交易所直接操作。
+**Q: The signature popup didn't appear?**
+Check:
+1. is the wallet locked (unlock it first)
+2. did the browser block popups (check the address-bar blocker)
+3. open the wallet extension manually to see if there's a pending signature request
+4. refresh and click sign again
 
-**Q: Moss 平台上的 Agent 数据有问题（Moss 平台客服类）**
-Bot 只透传 Moss 平台提供的数据，不对数据准确性负责。如对 Agent 的收益率、回撤等数据有异议，请联系 Moss 官方支持。
+**Q: How do I fill in the parameters? What do they mean?**
+| Parameter | Meaning | Suggested |
+|-----------|---------|-----------|
+| Follow ratio | the fraction of the agent's position to follow; 50% = half | conservative 30-50%, aggressive 80-100% |
+| Stop-loss | auto-stop copy-trading when the loss hits this | suggest -20% to -30% |
+| Take-profit | auto-stop when profit hits this | optional, or 50%+ |
+| Slippage | max allowed price deviation on orders | default 1.5% is fine |
 
-**Q: 能不能按我的想法交易？（自定义策略类）**
-Bot 只支持跟单模式（复制 Moss Agent 的交易），不支持用户自定义策略执行。如需自定义交易，请直接在 Hyperliquid 上操作。
+**Q: Can I exit mid-flow?**
+Yes, any time. Incomplete setup won't take effect; next time you re-enter, start setup from the top. Existing config and wallet info are retained — no need to regenerate the Agent Wallet.
 
-**Q: （与跟单无关的闲聊）**
-友好回应后引导回跟单主流程。例如：「感谢你的消息～我是跟单助手，主要负责帮你管理跟单服务。有什么跟单相关的问题可以随时问我！」
+---
+
+### 4. Copy-trade strategy
+
+**Q: Can I pick the agent? Which one am I following?**
+No, you can't pick. The followed agent is centrally selected and delivered by SuperClaw and takes effect at service start. This is so all users follow the currently-vetted strategy. **Note: the platform selecting an agent for you is not investment advice and guarantees no profit; all trading PnL and risk remain yours.** If the platform updates the agent, send "Sync latest agent" to switch to the latest official agent.
+
+**Q: What follow ratio is right?**
+Depends on your risk tolerance:
+- **Conservative**: 30-50%, lower volatility, good for beginners
+- **Balanced**: 50-80%, follows most of the position
+- **Aggressive**: 80-100%, near-full replication
+Above 100% (over-following) is not recommended — it can amplify risk.
+
+**Q: Should I set a stop-loss?**
+**Strongly recommended.** A stop-loss prevents oversized losses in extreme conditions. Suggested range -20% to -30%. Even if you like the agent's strategy, set a wide stop-loss as a safety net. 0 disables it.
+
+**Q: Can I follow multiple agents at once?**
+Each instance follows only the single currently-curated official agent; users cannot self-select, and cannot follow multiple.
+
+**Q: How do I read agent data? What do the metrics mean?**
+| Metric | Meaning |
+|--------|---------|
+| ROI | cumulative profit % since the agent was created |
+| PnL | absolute profit/loss amount (USDC) |
+| Max drawdown | the largest peak-to-trough loss historically |
+| Win rate | winning trades / total trades |
+| Uptime | time since the agent was created |
+
+---
+
+### 5. Run state
+
+**Q: Is copy-trading running?**
+Send "Status." The Bot returns run state, current followed agent, today's trade count, PnL, etc.
+
+**Q: Why no trade notifications?**
+Possible reasons:
+1. the agent hasn't traded recently (most common)
+2. the service is fine but the agent is waiting it out
+3. send "Status" to confirm the service is running
+If the service is stopped, restart it.
+
+**Q: How much did I make today?**
+Send "Status" or "PnL." The Bot returns today's PnL amount and percent, plus recent trade details.
+
+**Q: What's my current position?**
+Send "Status." The Bot returns the agent's current position coins and your synced position (synced live from Moss).
+
+**Q: How do I pause / resume?**
+- Send "Pause" → after confirmation, pause; all positions are flattened
+- Send "Resume" → after confirmation, resume from the current state
+While paused positions are flat; resuming re-inits the baseline.
+
+**Q: Can I change parameters while running?**
+Yes. Send "Adjust parameters" and pick which to change (follow ratio / stop-loss / take-profit / slippage / coin whitelist). Changes take effect immediately, no restart needed.
+
+---
+
+### 6. Errors & exceptions
+
+**Q: My stop-loss triggered — what happened?**
+Your copy-trade loss reached the preset stop-loss and copy-trading auto-stopped. At this point:
+- existing positions are yours to handle on Hyperliquid (the Bot won't auto-flatten)
+- you can manually close on Hyperliquid or keep holding
+- to copy-trade again, send "Resume"
+
+**Q: A copy-trade failed?**
+Possible causes:
+- **Insufficient balance** — not enough available funds to open; top up the HL account corresponding to your main wallet, not an on-chain transfer to the main wallet address
+- **Slippage too large** — volatile market, price exceeded the slippage limit; raise slippage a bit
+- **Network** — connection to Hyperliquid or Moss dropped, the Bot auto-reconnects; a failed Moss follower registration errors out and requires a fix + restart
+- **Order too small** — below Hyperliquid's minimum order size
+Check the log (`tail -f ~/.hyperliquid-copy-trade/<6>/logs/service.log`) for details.
+
+**Q: What if the agent stops operating?**
+If the agent you follow is delisted or stops on Moss:
+- the Bot can't get new signals
+- existing positions are unaffected and yours to handle
+- the platform will update the agent pointer; send "Sync latest agent" to switch to the current official agent
+
+**Q: The Bot is unresponsive / repeated messages get no response?**
+Try:
+1. send "Status" to confirm the Bot's current stage
+2. use the correct keywords (e.g. "Pause," "Resume," "Adjust parameters")
+3. if the Bot stays unresponsive, the service may have crashed — try restarting
+
+---
+
+### 7. Out of scope
+
+**Q: Which coin will go up? Should I buy? (investment advice)**
+The Bot gives no investment advice. The followed agent is chosen centrally by the platform and the user can't self-select; whether to participate and how much to allocate is the user's decision and their own risk.
+
+**Q: Close a specific position for me (manual trading)**
+The Bot only copy-trades (mirrors the agent); it doesn't support closing individual positions or custom trades. To close manually, do it directly on Hyperliquid.
+
+**Q: There's an issue with agent data on Moss (Moss support)**
+The Bot only passes through Moss data and isn't responsible for its accuracy. For disputes about an agent's ROI, drawdown, etc., contact Moss support.
+
+**Q: Can it trade my way? (custom strategy)**
+The Bot only supports copy-trade mode (mirroring the curated agent); it doesn't support user-defined strategy execution. For custom trading, use Hyperliquid directly.
+
+**Q: (off-topic chat)**
+Respond warmly, then steer back to copy-trading. E.g.: "Thanks for the message! I'm your copy-trade assistant — I mainly help manage your copy-trade service. Ask me anything copy-trade related!"
 
 ---
 
 ## Response Guidelines
 
-- **所有回复必须使用中文**
+- **All replies must be in English**
 - Always run `service status` first when the user asks about the service state
 - For first-time setup, walk through wallet setup → configure params → start (the agent is auto-selected by the platform; never ask the user to pick)
 - After `wallet-generate`, always prompt the user to complete authorization on the Hyperliquid UI and run `check-auth` before starting
 - When `check-auth` fails, explain which authorization is missing and provide the correct Hyperliquid UI URL
 - Never display the full private key — always mask it
 - When showing trade history, present the table output cleanly
-- **FAQ 回答原则**：回答用户问题时，结合用户当前所处阶段（钱包设置/配置参数/运行中）给出上下文相关的回复，不要机械地照搬 FAQ 原文，而是自然融入对话
+- **FAQ principle**: tailor answers to the user's current stage (wallet setup / configure params / running); don't parrot the FAQ verbatim, weave it naturally into the conversation
 
-### 防重复启动规则
+### Anti-duplicate-start rules
 
-**CRITICAL**: 启动服务前必须检查配置文件命名和现有服务：
+**CRITICAL**: before starting the service, check the config file naming and any existing service:
 
-1. **配置文件命名规范**（由代码强制执行）：
-   - 必须使用 `config_<地址后6位>.json` 格式
-   - 例如：`config_0a83c5.json`、`config_faa8dc.json`
-   - 地址后6位从 `wallet_address` 字段提取（取地址最后6位小写字符）
-   - **严禁使用** `config.json` 和 `config_default.json`，代码层面会直接拒绝启动
-   - 所有 CLI 命令必须通过 `--config <path>` 指定，不存在默认配置文件
-   - `wallet-generate` 默认保存到 `~/.hyperliquid-copy-trade/<6位>/config_<6位>.json`，不要依赖 skill 安装目录保存私钥
+1. **Config file naming (enforced in code)**:
+   - must use `config_<last 6 of address>.json`
+   - e.g. `config_0a83c5.json`, `config_faa8dc.json`
+   - the last 6 come from the `wallet_address` field (last 6 lowercase chars)
+   - `config.json` and `config_default.json` are **forbidden** — the code refuses to start
+   - all CLI commands must specify `--config <path>`; there is no default config
+   - `wallet-generate` saves to `~/.hyperliquid-copy-trade/<6>/config_<6>.json` by default; don't rely on the skill install dir to store the private key
 
-2. **所有 CLI 命令必须带 `--config`**：
+2. **All CLI commands must include `--config`**:
    ```bash
-   # 正确
+   # correct
    .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json service start
-   
-   # 错误（会报错退出）
+
+   # wrong (errors out)
    .venv/bin/python cli.py service start
    .venv/bin/python cli.py --config config.json service start
    ```
-   替代方式：设置环境变量 `FOLLOW_CONFIG=~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json`
+   Alternative: set env var `FOLLOW_CONFIG=~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json`
 
-3. **启动前检查流程**：
+3. **Pre-start checks**:
    ```bash
-   # Step 1: 确认要使用的配置文件名符合 config_<6位>.json 格式
-   
-   # Step 2: 检查是否有其他运行中的服务
+   # Step 1: confirm the config filename matches config_<6>.json
+
+   # Step 2: check for other running services
    ls -la ~/.hyperliquid-copy-trade/*/service.pid 2>/dev/null
-   # 或检查进程
+   # or check processes
    ps aux | grep "python.*cli.py.*service" | grep -v grep
-   
-   # Step 3: 如果发现同一钱包地址的服务已在运行，拒绝启动
+
+   # Step 3: if a service for the same wallet is already running, refuse to start
    ```
 
-4. **多账户管理**：
-   - 允许同时运行多个服务，每个服务使用独立的：
-     - 配置文件（`config_<地址后6位>.json`）
-     - PID 文件路径（通过配置中的 `pid_file` 字段区分）
-     - 数据库路径（通过配置中的 `db_path` 字段区分）
-   - `wallet-generate` 命令会自动配置以下实例隔离路径：
-     - PID: `~/.hyperliquid-copy-trade/<地址后6位>/service.pid`
-     - DB: `~/.hyperliquid-copy-trade/<地址后6位>/follow_agent.db`
-     - Logs: `~/.hyperliquid-copy-trade/<地址后6位>/logs/`
+4. **Multi-account management**:
+   - multiple services may run at once, each with isolated:
+     - config file (`config_<last 6>.json`)
+     - PID file path (via the config `pid_file` field)
+     - database path (via the config `db_path` field)
+   - `wallet-generate` auto-configures these isolated paths:
+     - PID: `~/.hyperliquid-copy-trade/<6>/service.pid`
+     - DB: `~/.hyperliquid-copy-trade/<6>/follow_agent.db`
+     - Logs: `~/.hyperliquid-copy-trade/<6>/logs/`
 
-5. **错误处理**：
-   - 配置文件名不符合规范 → 代码直接 SystemExit，提示正确格式
-   - 检测到同地址重复服务 → 拒绝启动，列出冲突的配置文件
-   - 未指定 `--config` → 代码报错退出，列出可用的配置文件
+5. **Error handling**:
+   - bad config filename → code SystemExit with the correct format
+   - duplicate service for the same address → refuse to start, list the conflicting config
+   - missing `--config` → error out, list available configs
 
-### Skill 升级提醒与执行规则
+### Skill upgrade prompt & execution rules
 
-当用户询问升级、更新 skill、修复线上版本，或 Bot 每日触发更新检查时，按以下规则处理：
+When the user asks about upgrading/updating the skill or fixing the live version, or the Bot's daily update check fires, follow these rules:
 
-1. **每日提醒原则**
-   - 每个实例每天最多检查/提醒一次官方更新；升级状态保存在 `~/.hyperliquid-copy-trade/<6位>/update_state.json`，不要使用全局 `~/.hyperliquid-copy-trade/update_state.json`；如果没有配置官方 manifest URL，不主动编造版本信息。
-   - **强制每日门禁**：除非用户明确问“检查更新/升级”，否则先运行 `update status` 或读取当前实例 `update_state.json`；如果 `last_update_check_at` 已经是用户当前自然日（按 Asia/Shanghai 判断），本轮对话禁止再运行 `update check`，也禁止在其它业务回答后追加“有新版本，要升级吗？”。
-   - 只有当天未检查过时，才允许执行 `update check`；`update check` 会写入 `last_update_check_at`，本日后续对话必须静默跳过更新提醒。
-   - 如果用户回复“稍后/暂不升级”，当天不再提醒；如果用户明确忽略某版本，执行 `update ignore <version>`。
-   - 检查命令优先使用当前实例配置：`.venv/bin/python cli.py --config <config> update check`；如需覆盖地址，再使用 `--manifest-url <官方manifest>`。
-   - 只在用户确认后执行升级；禁止静默升级。
+1. **Daily-reminder principle**
+   - at most one official-update check/prompt per instance per day; upgrade state is in `~/.hyperliquid-copy-trade/<6>/update_state.json` (not a global file); if no official manifest URL is configured, don't fabricate version info.
+   - **Daily gate**: unless the user explicitly asks "check for updates," run `update status` or read the instance `update_state.json` first; if `last_update_check_at` is already today (Asia/Shanghai), do not run `update check` again this turn, and do not append "there's a new version, upgrade?" after other answers.
+   - only run `update check` if not yet checked today; `update check` writes `last_update_check_at`, after which update prompts are silently skipped for the rest of the day.
+   - if the user says "later / not now," don't prompt again that day; if they explicitly ignore a version, run `update ignore <version>`.
+   - prefer the instance config: `.venv/bin/python cli.py --config <config> update check`; to override, add `--manifest-url <official manifest>`.
+   - only upgrade after user confirmation; never upgrade silently.
 
-2. **升级前说明**
-   - 明确展示当前版本（来自 `VERSION.json`）、最新版本（来自官方 manifest 的 `version` / `latest_version`）、主要 changelog。
-   - 告诉用户升级会短暂停止正在运行的跟单服务，但使用 `service stop`，并等待旧 PID 退出后再替换代码；不会平仓，不会清基线。
-   - 如用户选择稍后提醒，当天不再重复提醒；如用户忽略版本，执行 `update ignore <version>`。
+2. **Pre-upgrade explanation**
+   - clearly show the current version (from `VERSION.json`), the latest (from the official manifest's `version` / `latest_version`), and the main changelog.
+   - tell the user the upgrade briefly stops the running service via `service stop`, waits for the old PID to exit, then replaces code; it does not flatten positions or clear the baseline.
+   - if the user defers, don't re-prompt that day; if they ignore a version, run `update ignore <version>`.
 
-3. **升级执行命令**
+3. **Upgrade commands**
    ```bash
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json update status
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json update check
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json update apply --manifest-url <官方manifest> --yes
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json update status
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json update check
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json update apply --manifest-url <official manifest> --yes
    ```
-   - 如果使用本地升级包测试：
+   - for a local package test:
    ```bash
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json update apply --package /path/to/package.tar.gz --version <version> --yes
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json update apply --package /path/to/package.tar.gz --version <version> --yes
    ```
-   - `package_url` / `--package` 支持 `.tar.gz` 包或本地目录；线上 manifest 也可以指向 GitHub 仓库根目录或 `/tree/<ref>/<dir>` 目录 URL（升级器会下载仓库归档并定位该目录）。
+   - `package_url` / `--package` accept a `.tar.gz` or local dir; a live manifest can also point at a GitHub repo root or `/tree/<ref>/<dir>` URL (the upgrader downloads the archive and locates that dir).
 
-4. **升级安全规则**
-   - 升级前 CLI 会备份代码、`VERSION.json`、当前实例 config 和数据库到 `~/.hyperliquid-copy-trade/backups/update-<timestamp>/`。
-   - 升级后只恢复升级前已经 running 的服务；升级前 stopped/paused 的实例保持停止。
-   - 如果升级失败或用户要求回滚，使用：
+4. **Upgrade safety**
+   - before upgrading, the CLI backs up code, `VERSION.json`, the instance config, and DB to `~/.hyperliquid-copy-trade/backups/update-<timestamp>/`.
+   - after upgrading, only services that were running before are restored; instances stopped/paused before stay stopped.
+   - to roll back:
    ```bash
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json update rollback --yes
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json update rollback --yes
    ```
-   - 不要使用 `service pause` 进行升级停机；`pause` 会平仓并清基线，只用于用户主动暂停跟单。
+   - don't use `service pause` for upgrade downtime; `pause` flattens and clears the baseline and is only for a user-initiated pause.
 
-5. **用户话术**
-   - 升级确认前：说明“本次升级不会修改私钥配置，不会平仓；会先备份，再短暂停服务，升级后恢复原运行状态”。
-   - 升级完成后：输出版本变化、备份目录、服务最终状态，并建议观察 1-2 分钟确认 `service status` 正常。
+5. **User wording**
+   - before confirming: "this upgrade won't change your key config and won't flatten positions; it backs up first, briefly stops the service, then restores the prior run state."
+   - after: show the version change, backup dir, final service state, and suggest watching `service status` for 1-2 minutes.
 
-### 自动重启 Watchdog 规则
+### Auto-restart watchdog rules
 
-当用户询问“自动重启”“守护服务”“服务挂了自动拉起”等能力时，按以下规则处理：
+When the user asks about "auto-restart," "keep the service alive," "relaunch if it dies," follow these rules:
 
-1. **能力说明**
-   - 自动重启由本机系统调度器执行：macOS 使用 launchd，Linux 使用 systemd user timer。
-   - Skill/CLI 只负责安装、启用、禁用和检查 watchdog；跟单服务进程不监控自己。
-   - **状态来源必须是 `service watchdog status` 或 `~/.hyperliquid-copy-trade/<6位>/service_state.json`，不是 `config_<6位>.json`。不要说“从配置文件判断 watchdog_enabled”。**
-   - watchdog 只有在 `service_state.json` 中 `watchdog_enabled=true`、`desired_state=running`、`maintenance_mode=false`，且服务 PID 不存活、未触发重启限流时才会执行 `service start`。
-   - 不要执行 `config set watchdog_enabled ...`；运行态字段会被配置层拒绝/清理，自动重启只能通过 `service watchdog enable|disable|status` 管理。
-   - `install` / `enable` 不会主动启动服务；如果服务当前已运行，会同步 `desired_state=running`，后续异常退出才会自动拉起。
-   - watchdog 拉起服务时，`service start` 输出会写入 `watchdog.log`；不要用 pipe/capture 包住启动命令，避免 fork 后台子进程继承输出句柄导致 check 卡住。
+1. **Capability**
+   - auto-restart is run by the local system scheduler: launchd on macOS, a systemd user timer on Linux.
+   - the skill/CLI only installs, enables, disables, and checks the watchdog; the service process does not monitor itself.
+   - **State comes from `service watchdog status` or `~/.hyperliquid-copy-trade/<6>/service_state.json`, not `config_<6>.json`. Don't say "read watchdog_enabled from the config file."**
+   - the watchdog runs `service start` only when `service_state.json` has `watchdog_enabled=true`, `desired_state=running`, `maintenance_mode=false`, the PID is dead, and restart throttling isn't tripped.
+   - don't run `config set watchdog_enabled ...`; runtime fields are rejected/cleaned by the config layer — manage auto-restart only via `service watchdog enable|disable|status`.
+   - `install` / `enable` don't actively start the service; if it's already running they sync `desired_state=running`, and only a later abnormal exit triggers a relaunch.
+   - when the watchdog relaunches, `service start` output goes to `watchdog.log`; don't wrap the start command in a pipe/capture, to avoid the forked child inheriting output handles and hanging the check.
 
-2. **用户确认**
-   - 安装前必须说明：如果用户执行 `service stop` 或 `service pause`，watchdog 不会自动拉起；`pause` 仍会平仓并清基线。
-   - 用户确认后才执行安装命令。
+2. **User confirmation**
+   - before install, state: if the user runs `service stop` or `service pause`, the watchdog won't relaunch; `pause` still flattens and clears the baseline.
+   - install only after the user confirms.
 
-3. **常用命令**
+3. **Common commands**
    ```bash
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json service watchdog status
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json service watchdog install
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json service watchdog enable
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json service watchdog disable
-   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6位>/config_<6位>.json service watchdog uninstall
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json service watchdog status
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json service watchdog install
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json service watchdog enable
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json service watchdog disable
+   .venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/<6>/config_<6>.json service watchdog uninstall
    ```
 
-4. **状态联动**
-   - `service start` / `service resume` 会设置 `desired_state=running`。
-   - `service stop` 会设置 `desired_state=stopped`。
-   - `service pause` 会设置 `desired_state=paused`。
-   - `update apply` / `update rollback` 会进入 maintenance mode，避免升级期间 watchdog 拉起旧服务。
+4. **State coupling**
+   - `service start` / `service resume` set `desired_state=running`.
+   - `service stop` sets `desired_state=stopped`.
+   - `service pause` sets `desired_state=paused`.
+   - `update apply` / `update rollback` enter maintenance mode so the watchdog won't relaunch the old service during an upgrade.
 
-5. **用户话术**
-   - “开启后，我会在本机安装一个系统级 watchdog，每分钟检查一次服务；只有服务应当运行但异常退出时才会自动重启。你主动停止或暂停跟单时，它不会自动拉起。”
+5. **User wording**
+   - "Once enabled, I install a system-level watchdog on this machine that checks every minute; it only relaunches if the service should be running but exited abnormally. If you stop or pause yourself, it won't relaunch."

@@ -99,7 +99,8 @@ def _build_clients() -> tuple[Exchange, Info]:
         spot_meta = _get_spot_meta(api_url)
         info = Info(api_url, skip_ws=True, spot_meta=spot_meta)
         meta = info.meta()
-        exchange = Exchange(wallet, api_url, meta=meta, account_address=main_address, spot_meta=spot_meta)
+        vault_address = cfg.get("subaccount_address") or None
+        exchange = Exchange(wallet, api_url, meta=meta, account_address=main_address, vault_address=vault_address, spot_meta=spot_meta)
         _clients_cache = (exchange, info)
         return exchange, info
 
@@ -569,7 +570,7 @@ def close_all_positions() -> list[dict]:
     平掉 HL 上所有持仓。用于暂停跟单时全平仓。
     Returns: 每笔平仓结果列表 [{coin, side, size, status, filled_price, pnl, fee}]
     """
-    our_account = cfg.get("main_address") or cfg.get("wallet_address", "")
+    our_account = cfg.trading_account()
     if not our_account:
         logger.warning("No account address configured, cannot close positions")
         return []
@@ -672,7 +673,7 @@ def execute_delta_sync(
     对单个 coin 执行 delta 对齐。
     Per-coin 互斥锁确保同一 coin 不会被 WS 和 poller 并发重复下单。
     """
-    our_account = cfg.get("main_address") or cfg.get("wallet_address", "")
+    our_account = cfg.trading_account()
     if not our_account:
         logger.warning("No account address configured, skipping delta sync")
         return
@@ -731,7 +732,7 @@ def check_sl_tp_periodic(agent_address: str, agent_positions: dict) -> None:
     if stop_loss_pct <= 0 and take_profit_pct <= 0:
         return
 
-    our_account = cfg.get("main_address") or cfg.get("wallet_address", "")
+    our_account = cfg.trading_account()
     if not our_account:
         return
 
@@ -857,7 +858,7 @@ def sync_all_positions(agent_address: str, source: str = "align") -> None:
     批量同步所有仓位（一次 API 请求获取全量数据）。
     遍历 baselines 中的所有 coin（包括 Agent 当前无仓位的 coin，以便平仓）。
     """
-    our_account = cfg.get("main_address") or cfg.get("wallet_address", "")
+    our_account = cfg.trading_account()
     if not our_account:
         logger.warning("No account address configured, skipping sync_all_positions")
         return

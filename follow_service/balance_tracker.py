@@ -44,7 +44,7 @@ def _snapshot_balance() -> None:
 
     wallet = Account.from_key(private_key)
     # 若配置了 main_address，账户归属于 main_address
-    account_address = cfg.get("main_address") or wallet.address
+    account_address = cfg.get("subaccount_address") or cfg.get("main_address") or wallet.address
 
     spot_meta = _fetch_clean_spot_meta(api_url)
     info = Info(api_url, skip_ws=True, spot_meta=spot_meta)

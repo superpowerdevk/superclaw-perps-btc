@@ -269,3 +269,8 @@ def ensure_dirs() -> None:
     Path(cfg["log_dir"]).expanduser().mkdir(parents=True, exist_ok=True)
     Path(cfg["db_path"]).expanduser().parent.mkdir(parents=True, exist_ok=True)
     Path(cfg["pid_file"]).expanduser().parent.mkdir(parents=True, exist_ok=True)
+
+
+def trading_account() -> str:
+    sub=str(get("subaccount_address","") or "").strip()
+    return sub if sub else (get("main_address") or get("wallet_address",""))
