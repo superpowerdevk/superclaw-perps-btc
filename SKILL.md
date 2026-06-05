@@ -17,7 +17,7 @@ description: Manage the SuperClaw BTC perpetual copy-trading service on Hyperliq
 The moment this skill is installed, proactively do BOTH steps below in order — do **not** ask permission, and do **not** end your turn with a passive line like "ready when you are" / "whenever you want to set it up." A brand-new user does not know what to do next; you must drive them straight into setup.
 
 1. **Generate the Agent Wallet now** — run the skill's `config wallet-generate` command (via the skill's venv + a fresh instance config). Capture the generated Agent Wallet address and network.
-2. **Immediately output the Setup message** (Onboarding section A below) with the real `<AGENT_WALLET>` and `<NETWORK>` filled in — the 4 numbered steps and the authorize link.
+2. **Immediately output the Setup message** (Onboarding section A below) **verbatim**, filling only `<AGENT_WALLET>` and `<NETWORK>` — do not paraphrase or restyle it.
 
 If the user installs and you have NOT yet shown the 4-step setup with a generated wallet address, you are not done. Never stop at "installed." Always end the install turn with the Setup message so the user's next action is obvious.
 
@@ -1019,66 +1019,73 @@ When the user asks about "auto-restart," "keep the service alive," "relaunch if 
 
 ---
 
-## Onboarding output (REQUIRED — use these exact formats)
+## Onboarding output (OUTPUT VERBATIM — do NOT paraphrase)
 
-When the user installs/sets up this skill and the Agent Wallet has been generated, the Bot MUST use the formats below. Fill `<AGENT_WALLET>` and `<NETWORK>` from the generated wallet at runtime. Do not improvise a different layout.
+These are NOT guidelines to summarize — they are the exact text to show the user. Output blocks A and B **word-for-word**, changing only the two substitution tokens `<AGENT_WALLET>` and `<NETWORK>` (filled from the generated wallet). Do NOT paraphrase, reword, reorder, restyle, merge, rename headings, add, or remove anything. Do NOT invent your own framing (e.g. an "Important:" preamble). If you catch yourself rephrasing, stop and copy the block exactly. The text between the BEGIN/END markers is Markdown — reproduce it as Markdown (do not output the marker lines themselves).
 
-### A. Setup message — send on install, right after the Agent Wallet is generated
+### A. Setup message — output on install, right after the Agent Wallet is generated
 
-> SuperClaw BTC Perps — let's get you set up 🚀
-> ~3 minutes. The agent copy-trades BTC for you. You stay in control and can stop anytime.
->
-> **🔑 Your Agent Wallet** (created for you)
-> `<AGENT_WALLET>` · <NETWORK>
->
-> ### 1️⃣ Create a new wallet
-> Make a brand-new wallet just for this skill (don't reuse one from another SuperClaw skill). It lives on the **Arbitrum** chain.
->
-> ### 2️⃣ Open Hyperliquid & add USDC
-> Sign in to Hyperliquid with that new wallet — **email, OKX Wallet, MetaMask,** or any option they show. Then deposit **USDC** (the only thing you add — never BTC itself). Use **USDC on Arbitrum** or **USDC on HyperEVM**.
-> → https://app.hyperliquid.xyz
->
-> ### 3️⃣ Authorize trading
-> Open the link below with that same wallet and sign **Agent + Builder**. This lets the bot place BTC trades for you — no funds move, just permission.
-> → https://moss.site/hyperliquid/authorize/<AGENT_WALLET>
->
-> ### 4️⃣ Send me your wallet address
-> Reply with the `0x…` address from step 1, and I'll start copying BTC trades.
->
-> ✅ I pick the trading agent automatically — you don't choose one. Curious first? Just ask **"tell me about this agent."**
+=== BEGIN SETUP MESSAGE ===
+SuperClaw BTC Perps — let's get you set up 🚀
+~3 minutes. The agent copy-trades BTC for you. You stay in control and can stop anytime.
 
-Hard rules for the setup message:
-- Always include the actual generated Agent Wallet address + network, and the full authorize URL built from that address.
-- NEVER tell the user to reuse a wallet from another SuperClaw skill. If they report **"Too many extra agents… limit is 3,"** that is Hyperliquid's per-account agent cap — tell them to use a brand-new wallet for this skill.
-- NEVER tell the user to deposit BTC — collateral is always **USDC** (Arbitrum or HyperEVM).
-- After the user says "authorized" and sends their wallet address, do NOT ask them to pick an agent — it is curated and resolved automatically.
+**🔑 Your Agent Wallet** (created for you)
+`<AGENT_WALLET>` · <NETWORK>
 
-### B. Post-setup summary — send once the service is started / live
+⚠️ **Use a brand-new wallet for this skill** — not one you've used for another SuperClaw skill. Hyperliquid limits each account to ~3 trading agents, so each skill needs its own wallet.
 
-> **You're live! 🎉 Here's everything you can ask me — just type it plainly:**
->
-> ### 📊 Check on it
-> - **"status"** — running state, balance, current position
-> - **"show my position"** — your open BTC trade right now
-> - **"how am I doing?"** — profit/loss summary
-> - **"tell me about this agent"** — the agent's track record (ROI, drawdown, win rate)
->
-> ### ⚙️ Adjust your risk
-> - **"set follow ratio to 50%"** — copy at half the agent's trade size (lower = smaller, safer)
-> - **"set stop loss to 20%"** — auto-close a trade if it drops 20%
-> - **"show my settings"** — current ratio, stop loss, slippage
->
-> ### ⏯️ Control it
-> - **"pause"** — stop copying new trades (open ones stay)
-> - **"resume"** — start copying again
-> - **"stop"** — shut it down
->
-> ### 🔔 Auto-updates (optional)
-> Want position summaries automatically? Tell me how often: **every 5 min · 15 min · 30 min · 1 hour · 4 hours · 12 hours · daily**
-> - e.g. **"update me every 15 minutes"**
-> - **"stop updates"** — turn them off
->
-> 💡 New here? Start with **"how am I doing?"** anytime.
+### 1️⃣ Create a fresh wallet
+Make a new wallet/account in **OKX Wallet, MetaMask, or Phantom** (just add a new account — a couple of taps). It lives on the **Arbitrum** chain.
+💡 Keep a little **ETH on Arbitrum** in it for gas — you'll need it to approve and deposit USDC.
+
+### 2️⃣ Fund it with USDC
+Open Hyperliquid with that wallet and deposit **USDC** — that's the only thing you add (never BTC itself; perps are USDC-margined). Use **USDC on Arbitrum** or **USDC on HyperEVM**.
+→ https://app.hyperliquid.xyz
+
+### 3️⃣ Authorize trading
+Open the link below with that same wallet and sign **Agent + Builder**. This lets the bot place BTC trades for you — no funds move, just permission.
+→ https://moss.site/hyperliquid/authorize/<AGENT_WALLET>
+
+### 4️⃣ Send me your wallet address
+Reply with the `0x…` address of the wallet you just used, and I'll start copying BTC trades.
+
+✅ I pick the trading agent automatically — you don't choose one. Curious first? Just ask **"tell me about this agent."**
+=== END SETUP MESSAGE ===
+
+Hard rules (these still apply, but never change the wording above):
+- Fill `<AGENT_WALLET>` with the actual generated Agent Wallet address and `<NETWORK>` with its network; the authorize URL must contain that same address.
+- If the user reports **"Too many extra agents… limit is 3,"** that is Hyperliquid's per-account agent cap — tell them to use a brand-new wallet for this skill.
+- Collateral is always **USDC** — never tell the user to deposit BTC.
+- After the user sends their wallet address, do NOT ask them to pick an agent — it is curated and resolved automatically.
+
+### B. Post-setup summary — output VERBATIM once the service is live
+
+=== BEGIN LIVE SUMMARY ===
+**You're live! 🎉 Here's everything you can ask me — just type it plainly:**
+
+### 📊 Check on it
+- **"status"** — running state, balance, current position
+- **"show my position"** — your open BTC trade right now
+- **"how am I doing?"** — profit/loss summary
+- **"tell me about this agent"** — the agent's track record (ROI, drawdown, win rate)
+
+### ⚙️ Adjust your risk
+- **"set follow ratio to 50%"** — copy at half the agent's trade size (lower = smaller, safer)
+- **"set stop loss to 20%"** — auto-close a trade if it drops 20%
+- **"show my settings"** — current ratio, stop loss, slippage
+
+### ⏯️ Control it
+- **"pause"** — stop copying new trades (open ones stay)
+- **"resume"** — start copying again
+- **"stop"** — shut it down
+
+### 🔔 Auto-updates (optional)
+Want position summaries automatically? Tell me how often: **every 5 min · 15 min · 30 min · 1 hour · 4 hours · 12 hours · daily**
+- e.g. **"update me every 15 minutes"**
+- **"stop updates"** — turn them off
+
+💡 New here? Start with **"how am I doing?"** anytime.
+=== END LIVE SUMMARY ===
 
 ### C. Auto-update (cron) behavior
 - After the post-setup summary, proactively offer the auto-update interval menu.
