@@ -1,383 +1,84 @@
-> ⚠️ WARNING: This software executes real trades with real funds on Hyperliquid.
->
-> - You can lose some or all of your capital. Past performance of any Moss agent does not guarantee future results.
-> - This is beta software. There may be undiscovered bugs that could result in unexpected trades or losses.
-> - Never deposit more than you can afford to lose into your trading account.
-> - Your generated wallet's private key is stored locally. If compromised, your funds are at risk. Back it up securely and never commit it to version control.
-> - This software is provided as-is with no warranty.  
+# SuperClaw BTC Perps — Copy-Trade Skill
 
-> ⚠️ SECURITY: Never commit config files containing private keys to git.
->
-> Generated config files (config_<suffix>.json) contain your wallet's private key. The included .gitignore excludes these by default. If you fork this repo, double-check that your private key is not exposed.
+A SuperClaw skill that copy-trades a single, centrally-curated **BTC** perpetual agent on Hyperliquid onto **your own** account. Install it in SuperClaw, complete a short setup, and the skill mirrors the curated agent's BTC positions for you. You stay in control and can pause or stop anytime.
 
+> ⚠️ **Real funds, real trades.** This software places live perpetual trades on Hyperliquid with leverage. You can lose some or all of your capital. Past performance of any agent does not guarantee future results. Never deposit more than you can afford to lose. This is beta software — verify behavior with a small amount first.
 
+> 🔒 **Key safety.** Your generated agent-wallet key is stored locally in the per-instance config and is excluded from git by `.gitignore`. Never commit config files containing private keys.
 
-# Hyperliquid Copy Trade
+## What it does
 
-A lightweight Python service for copy trading a Moss strategy on Hyperliquid.
-
-The service watches a target Moss agent, builds a baseline snapshot of that agent's positions, and then keeps your Hyperliquid account aligned by applying position deltas instead of blindly replaying every fill.
-
-## What this project does
-
-- Tracks a Moss agent and mirrors position changes onto Hyperliquid
-- Uses a baseline + delta alignment model to avoid naive per-fill copy trading
-- Uses Moss WebSocket events as the primary signal channel, with REST polling as a fallback
-- Stores baselines, events, trades, balance snapshots, and alerts in SQLite
-- Runs as a background service with per-instance logs, PID files, and isolated state
-- Supports low-balance alerts, balance snapshots, and optional stop-loss / take-profit checks
-
-## Current limitations
-
-- BTC is the only supported trading asset in the current implementation
-- The service requires a dedicated generated trading wallet and a per-instance config file
-- Every operational command must use an explicit `--config` file after wallet generation
+- Follows **one curated BTC agent** (selected centrally by SuperClaw — you do not pick the trader) and mirrors its position changes onto your Hyperliquid account.
+- **Locked to BTC** — the skill only ever places BTC orders.
+- Uses a **baseline + delta** alignment model (it submits the minimum order to stay aligned) rather than blindly replaying every fill.
+- Runs on **your own dedicated Hyperliquid account**, funded with **USDC** — isolated from your other SuperClaw skills.
+- Exposes the curated agent's **overall track record** on request (ROI, PnL, max profit, max drawdown, liquidations, win rate, strategy).
 
 ## How it works
 
-1. Generate an agent wallet.
-2. Authorize that wallet on Hyperliquid from your main wallet.
-3. Register the generated wallet as a Moss follower.
-4. Point the config at a Moss `agent_id`.
-5. Start the background service.
-6. On startup, the service initializes a baseline from the target agent's current positions.
-7. After that, incoming Moss events trigger delta-based position alignment on Hyperliquid.
+1. On install, the skill generates a delegated **Agent Wallet** for you.
+2. You authorize that Agent Wallet on Hyperliquid (Agent + Builder) from a **fresh wallet** funded with USDC.
+3. The curated agent is resolved automatically from `active_agent.json` (the platform can update it for everyone by editing that pointer).
+4. The service builds a baseline of the agent's positions, then keeps your account aligned via deltas as the agent trades.
 
-The trading engine does not simply copy fills one by one. Instead, it compares:
+The Agent Wallet is a **trade-only delegate** — it can place orders on your behalf but cannot withdraw your funds, and you can revoke it anytime on Hyperliquid.
 
-- the agent's current position,
-- the baseline position recorded at startup, and
-- your current Hyperliquid position,
+## Setup (in SuperClaw — no terminal needed)
 
-then submits the minimum order needed to bring your account back into alignment.
+Install in your SuperClaw chat:
 
-## Architecture
-
-### Core modules
-
-- `cli.py` - command-line entrypoint for configuration, service control, stats, and inspection
-- `follow_service/main.py` - background service lifecycle, PID management, startup checks
-- `follow_service/moss_ws.py` - primary Moss WebSocket event consumer
-- `follow_service/moss_poller.py` - REST poller used as a backup signal path
-- `follow_service/trader.py` - Hyperliquid execution, alignment logic, leverage handling, SL/TP helpers
-- `follow_service/moss_client.py` - Moss REST client using follower wallet signatures
-- `follow_service/database.py` - SQLite schema and data access helpers
-- `follow_service/balance_tracker.py` - balance snapshots, low-balance alerts, periodic SL/TP checks
-- `follow_service/preflight.py` - Hyperliquid Agent/Builder authorization checks
-- `follow_service/config.py` - config validation, loading, and per-instance path management
-
-### Runtime data
-
-By default, each generated wallet gets its own state directory under:
-
-```bash
-~/.hyperliquid-copy-trade/<wallet_suffix>/
+```
+install https://github.com/superpowerdevk/superclaw-perps-btc
 ```
 
-That instance directory contains:
+The skill then walks you through 4 steps:
 
-- `config_<suffix>.json`
-- `follow_agent.db`
-- `service.pid`
-- `logs/service.log`
-- `logs/stdout.log`
-- `logs/stderr.log`
+1. **Create a fresh wallet** — a brand-new wallet (OKX Wallet, MetaMask, or Phantom) used only for this skill, on the **Arbitrum** chain. Keep a little ETH on Arbitrum for gas. (Hyperliquid caps agents per account at ~3, so each skill needs its own wallet.)
+2. **Fund it with USDC** — deposit USDC into that wallet's Hyperliquid account (USDC on Arbitrum or HyperEVM). Perps are USDC-margined — you never deposit BTC itself.
+3. **Authorize trading** — open the authorize link with that wallet and sign **Agent + Builder** (no funds move, just permission).
+4. **Send your wallet address** — reply with the address you used, and the skill starts copying BTC trades.
 
-You can override the base state directory with `FOLLOW_STATE_DIR`.
+## What you can ask (in chat)
+
+- `status` — running state, balance, current position
+- `show my position` — your open BTC trade right now
+- `how am I doing?` — your profit/loss summary
+- `tell me about this agent` — the **curated agent's overall** track record (ROI, drawdown, win rate, strategy) — not your own history
+- `set follow ratio to 50%` — copy at a fraction of the agent's size (lower = smaller, safer)
+- `set stop loss to 20%` — auto-close a trade if it drops that much
+- `show my settings` — current follow ratio, stop loss, slippage
+- `pause` / `resume` / `stop` — control the service
+- `update me every 15 minutes` — optional periodic position summaries (5 min · 15 min · 30 min · 1 hour · 4 hours · 12 hours · daily); `stop updates` to turn off
+
+## Agent track record
+
+`tell me about this agent` (or running `python3 agent_info.py`) fetches the curated agent's **overall** public metrics live from Moss and shows ROI, account PnL, max profit, **max drawdown**, blow-ups (liquidations), win rate, profit factor, trade count, and the strategy description. Drawdown and win rate are always shown next to ROI — this is informational, not investment advice.
+
+## Configuration
+
+The runnable project is a Python service (`follow_service/`) driven by `cli.py`; SuperClaw operates it for you. A per-instance config is generated under `~/.hyperliquid-copy-trade/<suffix>/config_<suffix>.json`. Key fields:
+
+- `private_key` / `wallet_address` — the generated Agent Wallet (delegate signer)
+- `main_address` — your funded Hyperliquid account
+- `allowed_coins` — the skill's asset lock (this skill: **BTC** only)
+- `agent_pointer_url` — remote pointer to the curated agent (`active_agent.json`)
+- `follow_ratio`, `stop_loss_pct`, `slippage_percent` — risk/execution tuning
+- `perp_dex` — set when the asset trades on a Hyperliquid builder DEX (e.g. commodities/equities like gold); the skill targets that market automatically
+
+Generated config files contain a private key and are git-ignored — never commit them.
+
+## Security
+
+- The generated wallet is a **delegated trading agent**, not a funding wallet — it cannot withdraw.
+- Keep your instance directory private; revoke Hyperliquid authorization if the agent wallet is no longer trusted.
+- Use a dedicated wallet per skill — do not reuse a wallet across skills.
 
 ## Requirements
 
 - Python 3.10+
-- A Hyperliquid account with funds in the main account you want to trade from
-- A Moss agent ID to follow
-- Network access to:
-  - `https://api.hyperliquid.xyz`
-  - `https://ai.moss.site`
-  - the authorization page under `https://moss.site`
+- A Hyperliquid account funded with USDC
+- Network access to `https://api.hyperliquid.xyz`, `https://ai.moss.site`, and the authorize page under `https://moss.site`
 
-## Installation
+---
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
-
-## Quick start
-
-### 1. Generate a wallet and instance config
-
-```bash
-.venv/bin/python cli.py config wallet-generate
-```
-
-This creates a new config file like:
-
-```bash
-~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json
-```
-
-Important notes:
-
-- Do not use `config.json`
-- Do not use `config_default.json`
-- The code only accepts config files named `config_<last6>.json`
-- After generation, use that config path in all commands
-
-### 2. Set your main Hyperliquid account address
-
-```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  config set main_address 0xYOUR_MAIN_ADDRESS
-```
-
-`main_address` is the funded Hyperliquid account that actually owns the capital.
-
-### 3. Authorize the generated wallet
-
-Open the authorization page using the generated `wallet_address`:
-
-```text
-https://moss.site/hyperliquid/authorize/<wallet_address>
-```
-
-The service checks two permissions before trading:
-
-- the generated wallet is authorized as an Agent for `main_address`
-- the required Builder address is approved on Hyperliquid
-
-Validate authorization with:
-
-```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  config check-auth
-```
-
-### 4. Configure the Moss agent to follow
-
-Set the target `agent_id`:
-
-```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  config set moss_source.agent_id agt_xxx
-```
-
-Optional tuning examples:
-
-```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  config set follow_ratio 1.0
-
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  config set slippage_percent 1.5
-
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  config set alignment_loss_pct 3.0
-```
-
-### 5. Register the wallet as a Moss follower
-
-```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  moss register
-```
-
-This uses the generated wallet's private key to sign the Moss follower registration request.
-
-### 6. Start the background service
-
-```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  service start
-```
-
-Check status:
-
-```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  service status
-```
-
-Stop it:
-
-```bash
-.venv/bin/python cli.py --config ~/.hyperliquid-copy-trade/f4c4cb/config_f4c4cb.json \
-  service stop
-```
-
-## Configuration
-
-The generated config is based on `config_default.json`.
-
-Example:
-
-```json
-{
-  "private_key": "",
-  "wallet_address": "",
-  "main_address": "",
-  "allowed_coins": ["BTC"],
-  "alignment_loss_pct": 3.0,
-  "slippage_percent": 1.5,
-  "follow_ratio": 1.0,
-  "stop_loss_pct": 0,
-  "take_profit_pct": 0,
-  "sl_tp_interval": 10,
-  "perp_only": true,
-  "low_balance_threshold_usd": 10.0,
-  "log_dir": "~/.hyperliquid-copy-trade/<suffix>/logs",
-  "db_path": "~/.hyperliquid-copy-trade/<suffix>/follow_agent.db",
-  "pid_file": "~/.hyperliquid-copy-trade/<suffix>/service.pid",
-  "hl_api_url": "https://api.hyperliquid.xyz",
-  "hl_authorize_url": "https://moss.site/hyperliquid/authorize",
-  "moss_source": {
-    "enabled": true,
-    "base_url": "https://ai.moss.site",
-    "agent_id": "",
-    "fill_poll_secs": 15,
-    "symbol_map": {
-      "BTCUSDT": "BTC",
-      "BTCUSDC": "BTC",
-      "BTC-USDC": "BTC"
-    },
-    "agent_name": ""
-  }
-}
-```
-
-### Important config fields
-
-- `private_key` - private key of the generated agent wallet
-- `wallet_address` - generated wallet used for follower registration and Hyperliquid agent authorization
-- `main_address` - funded Hyperliquid account to trade against
-- `follow_ratio` - multiplier applied on top of the account-value ratio between you and the source agent
-- `alignment_loss_pct` - startup deviation threshold; if exceeded, the service records a baseline but skips opening the initial catch-up position
-- `slippage_percent` - price offset used when placing IOC limit orders
-- `stop_loss_pct` / `take_profit_pct` - optional periodic close logic; disabled when set to `0`
-- `low_balance_threshold_usd` - low-balance alert threshold; internally floored to the system minimum order threshold
-- `moss_source.agent_id` - target Moss agent to follow
-- `moss_source.fill_poll_secs` - REST polling interval for the fallback poller
-- `allowed_coins` - currently forced to `['BTC']` by the service at startup
-
-## CLI reference
-
-### Service control
-
-```bash
-python cli.py --config <path> service start
-python cli.py --config <path> service stop
-python cli.py --config <path> service status
-python cli.py --config <path> service pause
-python cli.py --config <path> service resume
-python cli.py --config <path> service switch
-```
-
-Behavior notes:
-
-- `service pause` closes all positions, stops the service, and clears the baseline
-- `service resume` restarts the service and rebuilds the baseline
-- `service switch` pauses first, then prompts you to update `moss_source.agent_id`
-
-### Configuration
-
-```bash
-python cli.py --config <path> config show
-python cli.py --config <path> config set <key> <value>
-python cli.py --config <path> config check-auth
-python cli.py config wallet-generate
-```
-
-`config set` supports dotted keys such as `moss_source.agent_id` and tries to parse JSON values automatically.
-
-Examples:
-
-```bash
-python cli.py --config <path> config set follow_ratio 0.5
-python cli.py --config <path> config set perp_only true
-python cli.py --config <path> config set allowed_coins '["BTC"]'
-```
-
-### Moss
-
-```bash
-python cli.py --config <path> moss register
-```
-
-### Baseline and inspection
-
-```bash
-python cli.py --config <path> baseline show
-python cli.py --config <path> baseline reset
-python cli.py --config <path> trades --limit 20
-python cli.py --config <path> stats
-python cli.py --config <path> dashboard
-python cli.py --config <path> balance --limit 20
-```
-
-### Alerts
-
-```bash
-python cli.py --config <path> alerts list
-python cli.py --config <path> alerts list --unread
-python cli.py --config <path> alerts list --json
-python cli.py --config <path> alerts ack <id>
-python cli.py --config <path> alerts ack-all
-```
-
-## Database contents
-
-The SQLite database stores:
-
-- `agent_baseline` - per-agent baseline positions used for alignment
-- `events` - Moss fill / source events, including sync status for de-duplication
-- `trades` - local trade execution records with context and outcomes
-- `account_snapshots` - periodic account value and withdrawable balance snapshots
-- `alerts` - low-balance and other operational alerts
-
-## Operational notes
-
-- The service forks into the background on `service start`
-- A PID file is written per instance, so multiple configs can run independently
-- Logs are written with rotation to `logs/service.log`
-- On startup, authorization is checked and logged, but startup is not blocked if the check fails
-- The service uses both WebSocket events and REST polling to reduce missed updates
-- Duplicate execution is mitigated with baseline locks, fill de-duplication, recent-event checks, and per-coin locks
-
-## Security notes
-
-- Generated config files contain a private key and are written with restrictive permissions when possible
-- Keep the instance directory private and backed up appropriately
-- The generated wallet is intended to act as a delegated trading agent, not as a funding wallet
-- Revoke Hyperliquid authorization if the agent wallet is no longer trusted
-
-## Troubleshooting
-
-### Service says config is missing
-
-Every command after wallet generation must include `--config <path>` unless you set `FOLLOW_CONFIG`.
-
-### Service starts but does not trade
-
-Check the following:
-
-- `main_address` is set correctly
-- the generated wallet has been authorized on Hyperliquid
-- Builder authorization is approved
-- `moss_source.enabled` is `true`
-- `moss_source.agent_id` is set
-- follower registration completed successfully with `moss register`
-
-### Baseline exists but positions look wrong
-
-Reset the baseline and restart the service:
-
-```bash
-python cli.py --config <path> baseline reset
-python cli.py --config <path> service stop
-python cli.py --config <path> service start
-```
-
-## Development notes
-
-- There is currently no automated test suite in this repository
-- `README.md` documents the current code path, which uses follower wallet signatures for Moss access
-- `SKILL.md` contains conversation-flow notes for a higher-level skill wrapper, but the runnable project is the Python CLI and `follow_service/` package in this repository.
+*SuperClaw — vertical agent identities with compounding loops. The followed agent is curated by the platform; you bear all trading risk.*
