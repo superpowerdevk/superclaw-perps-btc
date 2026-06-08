@@ -48,7 +48,7 @@ LIVE = """**You're live! 🎉 Here's everything you can ask me — just type it 
 - **"status"** — running state, balance, current position
 - **"show my position"** — your open {ASSET} trade right now
 - **"how am I doing?"** — profit/loss summary
-- **"tell me about this agent"** — the agent's track record (ROI, drawdown, win rate)
+- **"tell me about this agent"** — the agent's strategy and track record
 
 ### ⚙️ Adjust your risk
 - **"set follow ratio to 50%"** — copy at half the agent's trade size (lower = smaller, safer)

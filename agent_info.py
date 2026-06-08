@@ -38,16 +38,17 @@ def _num(d, *path, default="-"):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True)
+    ap.add_argument("--config", default=None)
     ap.add_argument("--zh", action="store_true")
     args, _ = ap.parse_known_args()
 
-    try:
-        with open(args.config) as f:
-            cfg = json.load(f)
-    except Exception as e:  # noqa: BLE001
-        print(f"ERROR: could not read config {args.config}: {e}", file=sys.stderr)
-        sys.exit(1)
+    cfg = {}
+    if args.config:
+        try:
+            with open(args.config) as f:
+                cfg = json.load(f)
+        except Exception:  # noqa: BLE001
+            cfg = {}  # fall back to defaults + repo active_agent.json below
 
     moss = cfg.get("moss_source", {}) if isinstance(cfg.get("moss_source"), dict) else {}
     base = str(moss.get("base_url") or DEFAULT_BASE).rstrip("/")
@@ -109,15 +110,9 @@ def main() -> None:
         if strat and strat != "-":
             out += ["", "— 策略 —", f"  {strat}"]
         out += [
-            "", "— 核心指标（该 Agent 的整体表现，非你的记录）—",
-            f"  ROI(收益率)      : {roi}%",
-            f"  账户累计盈亏      : {pnl} USDC",
+            "", "— 业绩 —",
             f"  历史最大盈利      : {maxp}%  ({maxp_usd} USDC)",
-            f"  最大回撤          : {dd}%   ← 风险",
             f"  爆仓次数          : {liq}",
-            "", "— 其他 —",
-            f"  胜率 / 盈亏比      : {wr}% / {pf}",
-            f"  交易笔数          : {trades}",
             "", "注意：官方挑选 Agent 不构成投资建议，也不保证收益；过往业绩不代表未来表现，盈亏与风险由你自担。",
         ]
     else:
@@ -125,15 +120,9 @@ def main() -> None:
         if strat and strat != "-":
             out += ["", "— Strategy —", f"  {strat}"]
         out += [
-            "", "— Key metrics (this agent's OVERALL record, not your own) —",
-            f"  ROI               : {roi}%",
-            f"  Account PnL       : {pnl} USDC",
+            "", "— Track record —",
             f"  Max profit        : {maxp}%  ({maxp_usd} USDC)",
-            f"  Max drawdown      : {dd}%   <- risk",
             f"  Blow-ups (liqs)   : {liq}",
-            "", "— Secondary —",
-            f"  Win rate / PF     : {wr}% / {pf}",
-            f"  Trades            : {trades}",
             "", "Note: the platform selecting an agent for you is not investment advice and "
             "guarantees no profit; past performance does not predict future results, and you bear all risk.",
         ]
